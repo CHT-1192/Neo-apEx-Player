@@ -8,6 +8,8 @@
 
 #include "rhi/gs_emulation.h"
 
+#include <set>
+
 #include <D3Dcompiler.h>
 #include <D3DX11.h>
 
@@ -111,7 +113,22 @@ HRESULT CompileCommon(LPCVOID pSrcData, SIZE_T SrcDataSize, const D3D_SHADER_MAC
   if (!compiled.ok)
   {
     if (ppErrorMsgs) *ppErrorMsgs = CreateBlobString(compiled.error);
-    phxvk::LogError("D3DCompile(%s) failed: %s", debugName.c_str(), compiled.error.c_str());
+    // The engine probes one source for all four of v/h/d/g and keeps whichever
+    // entry points exist, so "entry point 'h' is not defined" is a normal
+    // answer, not a failure -- it was 105 of the 157 error-severity lines a
+    // short run produced.  A real compile error still reports as one.
+    if (compiled.error.find("is not defined in this shader source") != std::string::npos)
+    {
+      static std::mutex onceMutex;
+      static std::set<std::string> seen;
+      std::lock_guard<std::mutex> lock(onceMutex);
+      if (seen.insert(debugName).second)
+        phxvk::LogInfo("%s: no such entry point in this source (the engine probes v/h/d/g)", debugName.c_str());
+    }
+    else
+    {
+      phxvk::LogError("D3DCompile(%s) failed: %s", debugName.c_str(), compiled.error.c_str());
+    }
     return E_FAIL;
   }
 

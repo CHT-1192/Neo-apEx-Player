@@ -1190,7 +1190,11 @@ bool ContextImpl::PrepareDraw(VkPipeline *outPipeline, VkPipelineLayout *outLayo
   // quads for the wireframe grid.  Dropping the stage therefore loses those
   // primitives outright (the wireframe collapses to one-pixel hairlines, the
   // two-sided pass disappears) rather than merely shading them differently.
-  if (stages[kStageGS].shader && phxvk::Vk().features.geometryShader == VK_FALSE)
+  // Only a pipeline that has no replacement is actually missing its geometry.
+  // key.emulated is set when the stage was reproduced instead, and printing
+  // this for those pipelines made the port look like it was dropping geometry
+  // it was in fact drawing.
+  if (stages[kStageGS].shader && !key.emulated && phxvk::Vk().features.geometryShader == VK_FALSE)
   {
     // The shader-creation site owns OnceGsUnsupported(), so counting here needs
     // its own limiter -- otherwise the count this message exists to report
