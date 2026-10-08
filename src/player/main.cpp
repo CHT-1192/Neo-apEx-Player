@@ -40,12 +40,6 @@ extern CArray<CphxResource *> UpdateQueue;
 #include "rhi/vk_core.h"
 #include "ui.h"                            // the setup dialog, in its own window
 #include "Project.h"                       // CphxProject: the loading-screen project
-
-// The engine's binary project loader reads its screen size, fullscreen state and
-// hardware aspect from here (Phoenix/Project.cpp:286-291).  MinimalPlayer
-// declares it in SetupDialog.h and fills it from the dialog; the port fills it
-// from the same answers.
-SETUPCFG setupcfg;
 #include "platform/phx_monitor_aspect.h"   // its "Monitor Aspect" answer, for the engine
 #include "XMLDocument.h"                   // the .apx's <Group>/<Title>, for the dialog
 
@@ -315,6 +309,13 @@ static void ReadProjectStrings(const std::string &path, phxplayer::SetupInfo *in
   if (root.GetChildCount((TCHAR *)"Title")) info->title = root.GetChild((TCHAR *)"Title").GetText().GetPointer();
   if (root.GetChildCount((TCHAR *)"Group")) info->group = root.GetChild((TCHAR *)"Group").GetText().GetPointer();
 }
+
+// The engine's binary project loader reads its screen size, fullscreen state and
+// hardware aspect from here (Phoenix/Project.cpp:286-291).  MinimalPlayer
+// declares it in SetupDialog.h and fills it from the dialog; the port fills it
+// from the same answers, just before the loading-screen project is loaded.
+SETUPCFG setupcfg;
+
 
 int main(int argc, char **argv)
 {
@@ -599,43 +600,6 @@ int main(int argc, char **argv)
     CString apxPath(opt.project.c_str());
     Project.Import(apxPath, (HWND)0);
     phxvk::LogInfo("project imported: %s", opt.project.c_str());
-  }
-
-  // ---------------------------------------------------------------------
-  // Diagnostic: switch individual timeline events off.
-  //
-  // APEX_DISABLE_EVENT=<index>[,<index>...] or `all-<type>` collapses an event
-  // to zero length, which is enough to take it out of the frame: the timeline
-  // only renders events whose [StartFrame, EndFrame) contains the frame.  This
-  // is how a scene gets attributed to the event that draws it, without
-  // guessing from the .apx.
-  if (const char *spec = getenv("APEX_DISABLE_EVENT"))
-  {
-    const int count = (int)Project.Timeline->Events.NumItems();
-    auto disable = [&](int i) {
-      if (i < 0 || i >= count) return;
-      CphxEvent_Tool *e = Project.Timeline->Events[i];
-      if (!e || !e->Event) return;
-      phxvk::LogWarn("diagnostic: event %d (type %d) disabled", i, (int)e->Type);
-      e->Event->EndFrame = e->Event->StartFrame;
-    };
-    std::string s(spec);
-    if (s.rfind("all-", 0) == 0)
-    {
-      const int type = atoi(s.c_str() + 4);
-      for (int i = 0; i < count; i++)
-        if ((int)Project.Timeline->Events[i]->Type == type) disable(i);
-    }
-    else
-    {
-      for (size_t pos = 0; pos < s.size();)
-      {
-        size_t comma = s.find(',', pos);
-        disable(atoi(s.substr(pos, comma - pos).c_str()));
-        if (comma == std::string::npos) break;
-        pos = comma + 1;
-      }
-    }
   }
 
   // ---------------------------------------------------------------------

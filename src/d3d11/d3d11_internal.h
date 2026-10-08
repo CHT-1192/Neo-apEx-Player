@@ -54,8 +54,6 @@ struct Once
   operator bool() { return (*this)(); }
 };
 Once &OnceGsUnsupported();
-// Pipelines whose geometry shader stage was dropped (device has no GS).
-extern unsigned g_gsSkippedPipelines;
 Once &OnceFullscreen();
 Once &OnceCompressedUpload();
 Once &OnceReductionMode();

@@ -1199,7 +1199,6 @@ bool ContextImpl::PrepareDraw(VkPipeline *outPipeline, VkPipelineLayout *outLayo
     // The shader-creation site owns OnceGsUnsupported(), so counting here needs
     // its own limiter -- otherwise the count this message exists to report
     // would never print at all.
-    ++g_gsSkippedPipelines;
     static int logged = 0;
     if (logged < 8)
       phxvk::LogWarn("[d3d11] geometry shader stage DROPPED for pipeline #%u (MoltenVK/Metal has no geometry "

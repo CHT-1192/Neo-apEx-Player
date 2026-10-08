@@ -14,10 +14,6 @@ Once &OnceGsUnsupported()
   return o;
 }
 
-// How many pipelines had a geometry shader stage dropped because the device
-// cannot run one.  The stage is not decorative -- see the note in
-// d3d11_context.cpp where it is dropped.
-unsigned g_gsSkippedPipelines = 0;
 Once &OnceFullscreen()
 {
   static Once o;
