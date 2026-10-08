@@ -1950,15 +1950,17 @@ bool ContextImpl::DrawInternal(bool indexed, UINT count, UINT instanceCount, UIN
   VkBuffer emuIb = VK_NULL_HANDLE;
   VkDeviceSize emuIbOffset = 0;
   uint32_t emuIndexCount = 0;
-  if (emulatedPipeline && emulationPlan && indexed)
+  if (emulatedPipeline && emulationPlan)
   {
     auto *vb = vertexBuffers[0] ? static_cast<BufferImpl *>(vertexBuffers[0]) : nullptr;
-    auto *ib = indexBuffer ? static_cast<BufferImpl *>(indexBuffer) : nullptr;
-    if (!vb || !ib || vb->shadow.empty() || ib->shadow.empty() || vertexStrides[0] == 0)
+    auto *ib = (indexed && indexBuffer) ? static_cast<BufferImpl *>(indexBuffer) : nullptr;
+    // A non-indexed draw (the engine's particle path) has no index buffer at
+    // all; its vertices are taken sequentially.
+    if (!vb || vb->shadow.empty() || vertexStrides[0] == 0 || (indexed && (!ib || ib->shadow.empty())))
     {
       static Once once;
       if (once())
-        phxvk::LogWarn("[d3d11] cannot emulate the geometry shader for a draw without readable vertex and index data");
+        phxvk::LogWarn("[d3d11] cannot emulate the geometry shader for a draw without readable vertex data");
       return false;
     }
     if (baseVertex != 0 || instanceCount > 1)
@@ -1971,8 +1973,10 @@ bool ContextImpl::DrawInternal(bool indexed, UINT count, UINT instanceCount, UIN
 
     phxvk::FatGeometry fat;
     std::string err;
+    const void *indexData = ib ? ib->shadow.data() : nullptr;
+    const size_t firstIndex = indexed ? startIndex : 0;
     if (!phxvk::BuildFatGeometry(emulationPlan->program, vb->shadow.data(), vb->shadow.size(), vertexStrides[0],
-                                 indexFormat == DXGI_FORMAT_R32_UINT, ib->shadow.data(), count, startIndex, fat, &err))
+                                 indexFormat == DXGI_FORMAT_R32_UINT, indexData, count, firstIndex, fat, &err))
     {
       static Once once;
       if (once()) phxvk::LogWarn("[d3d11] geometry shader emulation could not build the fat geometry: %s", err.c_str());
@@ -2052,6 +2056,15 @@ bool ContextImpl::DrawInternal(bool indexed, UINT count, UINT instanceCount, UIN
     vkCmdBindVertexBuffers(cmd, i, 1, &vkBuf, &offset);
   }
 
+  if (emuIb != VK_NULL_HANDLE)
+  {
+    // Emulated geometry is always drawn indexed: the strip layout and the
+    // primitive restarts that separate the geometry shader's strips live in the
+    // generated index buffer, even when the original draw had none.
+    vkCmdBindIndexBuffer(cmd, emuIb, emuIbOffset, VK_INDEX_TYPE_UINT32);
+    vkCmdDrawIndexed(cmd, emuIndexCount, 1, 0, 0, 0);
+    return true;
+  }
   if (indexed)
   {
     if (!indexBuffer)
@@ -2059,14 +2072,6 @@ bool ContextImpl::DrawInternal(bool indexed, UINT count, UINT instanceCount, UIN
       static Once once;
       if (once()) phxvk::LogWarn("[d3d11] DrawIndexed with no index buffer bound; ignoring");
       return false;
-    }
-    if (emuIb != VK_NULL_HANDLE)
-    {
-      // The emulated strip is always 32-bit, and its indices already account
-      // for startIndex, so the draw starts at zero.
-      vkCmdBindIndexBuffer(cmd, emuIb, emuIbOffset, VK_INDEX_TYPE_UINT32);
-      vkCmdDrawIndexed(cmd, emuIndexCount, 1, 0, 0, 0);
-      return true;
     }
     auto *buf = static_cast<BufferImpl *>(indexBuffer);
     VkBuffer vkBuf = buf->boundBuffer();

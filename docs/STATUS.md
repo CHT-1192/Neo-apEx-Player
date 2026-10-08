@@ -107,12 +107,46 @@ shader: a fixed-size expansion of one input primitive into a small triangle
 stream. The port now counts and names the affected pipelines instead of
 announcing the skip once and moving on.
 
-Fixing it properly means emulating the geometry shader, not working around it:
-feed the shader all K vertices of the input primitive in one vertex, select the
-k-th `Append` with `SV_VertexID % N`, and rebuild the strip with primitive
-restart. The port already rewrites HLSL before it reaches glslang
-(`src/rhi/shader_compiler.cpp`), so that translation belongs there. Not done
-yet.
+**This is now emulated** (`src/rhi/gs_emulation.{h,cpp}`, `tests/gs_emulation_test.cpp`).
+The shape of a geometry shader is read out of its HLSL when it compiles, the
+entry point is translated into a vertex shader, and the draw is rebuilt:
+
+  * the input primitive's K vertices are packed into one "fat" vertex and N of
+    those are emitted per primitive, so the translated stage can run the
+    original vertex shader on every vertex of the primitive;
+  * the translated stage walks the geometry shader's body and returns at the
+    `Append` whose running index equals `SV_VertexID % N`; a slot the body never
+    reached collapses to a zero-w vertex and contributes no geometry;
+  * the emitted vertices are drawn as a triangle strip with a primitive restart
+    wherever the body called `RestartStrip`, so the fixed-function assembler
+    rebuilds the strips the geometry shader would have streamed;
+  * `Append` calls inside a loop with a literal trip count are expanded, which
+    `[PBR Mixed Rendering]` depends on -- reading the body linearly puts its
+    restarts after slot 1 and 2 instead of 3 and 6 and every triangle built from
+    that strip is wrong.
+
+A shader that does not fit is refused by name and the stage is dropped as
+before: an output stream that is not a `TriangleStream`, an input primitive
+that is not point/line/triangle, or a `RestartStrip` in a loop whose trip count
+is not a literal. Everything the emulation builds is cached per distinct draw --
+the expansion for the grid alone is 16k vertices and 21k indices, and rebuilding
+it into the per-frame ring exhausted the ring inside one frame.
+
+Against the reference video (mean absolute difference, 30-frame warm-up):
+
+| time | before | after |
+|---|---|---|
+| 0:31 | 4.170 | **3.208** |
+| 0:39 | 6.957 | **6.174** |
+| 1:06 | 3.653 | 3.653 |
+| 1:18 | 6.622 | 6.622 |
+| 3:00 | 13.195 | 13.195 |
+
+One open question found while sweeping, and it is **not** from this work: at
+55 s the port renders the incoming scene about a quarter of a second before the
+reference does. Checking out the commit before the emulation and capturing the
+same frame reproduces it exactly (the striped ridge is there both with and
+without), so it is a pre-existing frame/cut question.
 
 ## MILESTONE 6: the 50-second hang was RAND_MAX
 

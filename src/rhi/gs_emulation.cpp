@@ -451,8 +451,7 @@ bool BuildFatGeometry(const GsProgram &gs, const void *vb, size_t vbSize, size_t
 {
   out = FatGeometry();
   if (!gs.ok) { if (error) *error = "the geometry shader was not accepted for emulation"; return false; }
-  if (!vb || !indices || !stride) { if (error) *error = "no vertex or index data"; return false; }
-  if (firstIndex + indexCount > 0 && !indices) { if (error) *error = "index range is out of bounds"; return false; }
+  if (!vb || !stride) { if (error) *error = "no vertex data"; return false; }
 
   const size_t k = (size_t)gs.inputVertices;
   const size_t slots = (size_t)gs.slots;
@@ -473,7 +472,8 @@ bool BuildFatGeometry(const GsProgram &gs, const void *vb, size_t vbSize, size_t
     for (size_t i = 0; i < k; i++)
     {
       const size_t at = firstIndex + p * k + i;
-      const uint32_t vx = indicesAre32Bit ? ((const uint32_t *)indices)[at] : (uint32_t)((const uint16_t *)indices)[at];
+      const uint32_t vx = !indices ? (uint32_t)at
+                                   : (indicesAre32Bit ? ((const uint32_t *)indices)[at] : (uint32_t)((const uint16_t *)indices)[at]);
       const size_t offset = (size_t)vx * stride;
       if (offset + stride > vbSize)
       {
