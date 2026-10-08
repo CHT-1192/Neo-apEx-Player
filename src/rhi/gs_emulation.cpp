@@ -99,68 +99,174 @@ std::string FirstParameterType(const std::string &params)
   return ReadIdent(params, p);
 }
 
-// Where a RestartStrip sits relative to the Appends, in execution order for a
-// straight-line body.
+// Where a RestartStrip sits relative to the Appends, in the order the stream
+// is built.  Appends inside a loop whose trip count is a literal are expanded,
+// because that is what decides where the strips break -- [PBR Mixed Rendering]
+// appends three vertices in a `for` loop and one of Clean Slate's own shaders
+// would otherwise be laid out wrong.
 struct CallScan
 {
   int appends = 0;
   std::vector<int> restartsAfter; // cumulative append count at each RestartStrip
-  bool restartInsideLoop = false;
+  bool unknown = false;           // a restart whose slot depends on a trip count we cannot read
 };
 
-CallScan ScanBody(const std::string &body)
+bool ReadIntLiteral(const std::string &s, size_t &p, int &out)
 {
-  CallScan scan;
-  // Ranges of any loop bodies, so a RestartStrip inside one can be rejected:
-  // its position depends on the loop trip count, which is not recoverable from
-  // the index buffer.
-  std::vector<std::pair<size_t, size_t>> loopBodies;
-  for (size_t at = 0; (at = body.find("for", at)) != std::string::npos; at += 3)
-  {
-    if (at > 0 && IsIdentChar(body[at - 1])) continue;
-    if (at + 3 < body.size() && IsIdentChar(body[at + 3])) continue;
-    // The body is the brace that immediately follows the closing parenthesis;
-    // a brace-bodied loop is the only shape whose RestartStrip positions could
-    // hide a trip count.
-    size_t p = body.find('(', at);
-    if (p == std::string::npos) continue;
-    int depth = 0;
-    size_t close = std::string::npos;
-    for (size_t q = p; q < body.size(); q++)
-    {
-      if (body[q] == '(') depth++;
-      else if (body[q] == ')' && --depth == 0) { close = q; break; }
-    }
-    if (close == std::string::npos) continue;
-    size_t brace = close + 1;
-    SkipSpace(body, brace);
-    if (brace >= body.size() || body[brace] != '{') continue;
-    std::string ignored;
-    size_t after = 0;
-    if (!ExtractBody(body, brace, ignored, nullptr, &after)) continue;
-    loopBodies.emplace_back(brace, after);
-  }
+  SkipSpace(s, p);
+  const size_t begin = p;
+  if (p < s.size() && (s[p] == '-' || s[p] == '+')) p++;
+  while (p < s.size() && isdigit((unsigned char)s[p])) p++;
+  if (p == begin) return false;
+  out = atoi(s.substr(begin, p - begin).c_str());
+  return true;
+}
 
-  for (size_t at = 0; at < body.size();)
+// Recognises `for ( int x = A; x < B; x++ )` and `for ( int x = A; x >= B; x-- )`
+// with literal A and B, which is the only shape the engine writes.
+bool LoopTrips(const std::string &text, size_t forAt, int &trips)
+{
+  const size_t open = text.find('(', forAt);
+  if (open == std::string::npos) return false;
+  int depth = 0;
+  size_t close = std::string::npos;
+  for (size_t q = open; q < text.size(); q++)
   {
-    if (body.compare(at, 6, "Append") == 0 && (at == 0 || !IsIdentChar(body[at - 1])) && (at + 6 >= body.size() || !IsIdentChar(body[at + 6])))
+    if (text[q] == '(') depth++;
+    else if (text[q] == ')' && --depth == 0) { close = q; break; }
+  }
+  if (close == std::string::npos) return false;
+
+  const std::string head = text.substr(open + 1, close - open - 1);
+  const size_t semi1 = head.find(';');
+  const size_t semi2 = (semi1 == std::string::npos) ? std::string::npos : head.find(';', semi1 + 1);
+  if (semi1 == std::string::npos || semi2 == std::string::npos) return false;
+
+  const std::string init = head.substr(0, semi1);
+  const std::string cond = head.substr(semi1 + 1, semi2 - semi1 - 1);
+  const std::string step = head.substr(semi2 + 1);
+
+  size_t p = init.find('=');
+  if (p == std::string::npos) return false;
+  int start = 0;
+  p++;
+  if (!ReadIntLiteral(init, p, start)) return false;
+
+  size_t lt = cond.find('<'), ge = cond.find(">=");
+  if (lt == std::string::npos && ge == std::string::npos) return false;
+  const bool ascending = (lt != std::string::npos && (ge == std::string::npos || lt < ge));
+  size_t q = ascending ? lt + 1 : ge + 2;
+  int limit = 0;
+  if (!ReadIntLiteral(cond, q, limit)) return false;
+
+  if (step.find("++") == std::string::npos && step.find("--") == std::string::npos) return false;
+  if (ascending != (step.find("++") != std::string::npos)) return false;
+
+  trips = ascending ? (limit - start) : (start - limit + 1);
+  return trips > 0 && trips <= 64;
+}
+
+// The end of the statement that starts at `from`: the ';' that closes it at
+// bracket depth zero.  Used for a loop written without braces.
+size_t StatementEnd(const std::string &text, size_t from, size_t end)
+{
+  int depth = 0;
+  for (size_t p = from; p < end; p++)
+  {
+    if (text[p] == '(' || text[p] == '{') depth++;
+    else if (text[p] == ')' || text[p] == '}') depth--;
+    else if (text[p] == ';' && depth <= 0) return p + 1;
+  }
+  return end;
+}
+
+void ScanRange(const std::string &text, size_t begin, size_t end, CallScan &scan, int depth)
+{
+  if (depth > 4) { scan.unknown = true; return; }
+  for (size_t at = begin; at < end;)
+  {
+    if (at + 3 <= end && text.compare(at, 3, "for") == 0 && (at == begin || !IsIdentChar(text[at - 1])) &&
+        (at + 3 >= text.size() || !IsIdentChar(text[at + 3])))
+    {
+      int trips = 0;
+      if (LoopTrips(text, at, trips))
+      {
+        // The body is either the brace that follows the closing parenthesis or,
+        // for a loop written without braces (`for (...) Append(...);`), the
+        // single statement up to its semicolon.  Taking the next brace in the
+        // file for the body is how the PBR shader ended up scanning the
+        // `if (dat.z > 0.5)` block three times over.
+        size_t close = std::string::npos;
+        {
+          size_t open = text.find('(', at);
+          int d = 0;
+          for (size_t q = open; q != std::string::npos && q < end; q++)
+          {
+            if (text[q] == '(') d++;
+            else if (text[q] == ')' && --d == 0) { close = q; break; }
+          }
+        }
+        size_t bodyStart = 0, bodyEnd = 0;
+        bool haveBody = false;
+        if (close != std::string::npos)
+        {
+          size_t p = close + 1;
+          SkipSpace(text, p);
+          if (p < end && text[p] == '{')
+          {
+            std::string ignored;
+            haveBody = ExtractBody(text, p, ignored, &bodyStart, &bodyEnd) && bodyEnd <= end;
+          }
+          else
+          {
+            bodyStart = p;
+            bodyEnd = StatementEnd(text, p, end);
+            haveBody = bodyEnd > bodyStart;
+          }
+        }
+        if (haveBody)
+        {
+          for (int i = 0; i < trips; i++) ScanRange(text, bodyStart, bodyEnd, scan, depth + 1);
+          at = bodyEnd + (bodyEnd < end && text[bodyEnd] == '}' ? 1 : 0);
+          continue;
+        }
+      }
+      // A loop whose trip count cannot be read: walk its body once so that a
+      // RestartStrip inside it is still noticed, and mark the shape unsupported.
+      std::string ignored;
+      size_t bodyStart = 0, bodyEnd = 0;
+      if (ExtractBody(text, at, ignored, &bodyStart, &bodyEnd))
+      {
+        CallScan inner;
+        ScanRange(text, bodyStart, bodyEnd, scan, depth + 1);
+        if (!inner.restartsAfter.empty()) scan.unknown = true;
+        at = bodyEnd + 1;
+        continue;
+      }
+    }
+
+    if (text.compare(at, 6, "Append") == 0 && (at == 0 || !IsIdentChar(text[at - 1])) && (at + 6 >= text.size() || !IsIdentChar(text[at + 6])))
     {
       size_t p = at + 6;
-      SkipSpace(body, p);
-      if (p < body.size() && body[p] == '(') scan.appends++;
+      SkipSpace(text, p);
+      if (p < text.size() && text[p] == '(') scan.appends++;
       at += 6;
       continue;
     }
-    if (body.compare(at, 12, "RestartStrip") == 0)
+    if (text.compare(at, 12, "RestartStrip") == 0)
     {
-      for (const auto &lo : loopBodies)
-        if (at > lo.first && at < lo.second) scan.restartInsideLoop = true;
       scan.restartsAfter.push_back(scan.appends);
       at += 12;
       continue;
     }
     at++;
   }
+}
+
+CallScan ScanBody(const std::string &body)
+{
+  CallScan scan;
+  ScanRange(body, 0, body.size(), scan, 0);
   return scan;
 }
 
@@ -187,7 +293,7 @@ GsProgram AnalyseGeometryShader(const std::string &source, const char *gsEntry, 
   if (!ExtractBody(source, gsAfter, gsBody)) { gs.reason = "the geometry entry point has no body"; return gs; }
 
   const CallScan scan = ScanBody(gsBody);
-  if (scan.restartInsideLoop) { gs.reason = "RestartStrip inside a loop: the strip layout is not statically known"; return gs; }
+  if (scan.unknown) { gs.reason = "a RestartStrip sits in a loop whose trip count is not a literal"; return gs; }
   if (scan.appends == 0) { gs.reason = "the geometry shader appends nothing"; return gs; }
   if (scan.appends > shape.maxVertexCount) { gs.reason = "more Append calls than maxvertexcount allows"; return gs; }
 

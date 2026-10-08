@@ -135,7 +135,18 @@ HRESULT CompileCommon(LPCVOID pSrcData, SIZE_T SrcDataSize, const D3D_SHADER_MAC
       }
       if (emu.ok)
       {
-        RegisterEmulatedVertexShader(compiled.spirv.data(), compiled.spirv.size() * sizeof(uint32_t), emu.spirv);
+        // The emulated stage's own reflection has to be registered too: it was
+        // compiled here rather than through D3DCompile, so nothing else knows
+        // its descriptor bindings.
+        ShaderReflectionRecord emuRec;
+        emuRec.reflection = emu.reflection;
+        emuRec.stage = phxvk::ShaderStage::Vertex;
+        RegisterShaderReflection(emu.spirv.data(), emu.spirv.size() * sizeof(uint32_t), emuRec);
+
+        EmulatedGeometryShader entry;
+        entry.vertexSpirv = emu.spirv;
+        entry.program = gs;
+        RegisterEmulatedGeometryShader(compiled.spirv.data(), compiled.spirv.size() * sizeof(uint32_t), entry);
         static int logged = 0;
         if (logged++ < 8)
           phxvk::LogWarn("[d3d11] geometry shader emulated: %s in x%d -> %d vertices per primitive, "

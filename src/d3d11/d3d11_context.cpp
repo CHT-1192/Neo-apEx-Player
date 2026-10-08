@@ -2,6 +2,8 @@
 // command buffer, dynamic rendering and lazily built pipelines.
 #include "d3d11_internal.h"
 
+#include "rhi/gs_emulation.h"
+
 #include "dxgi_formats.h"
 
 #include <algorithm>
@@ -238,6 +240,14 @@ void ContextImpl::DestroyVulkanObjects()
   phxvk::Device &d = phxvk::Vk();
   if (!d.device) return;
   vkDeviceWaitIdle(d.device);
+  for (auto &e : emulatedGeometryCache)
+  {
+    if (e.second.vbo) vkDestroyBuffer(d.device, e.second.vbo, nullptr);
+    if (e.second.vboMemory) vkFreeMemory(d.device, e.second.vboMemory, nullptr);
+    if (e.second.ibo) vkDestroyBuffer(d.device, e.second.ibo, nullptr);
+    if (e.second.iboMemory) vkFreeMemory(d.device, e.second.iboMemory, nullptr);
+  }
+  emulatedGeometryCache.clear();
   for (auto &p : pipelines)
     if (p.second) vkDestroyPipeline(d.device, p.second, nullptr);
   pipelines.clear();
@@ -1020,6 +1030,40 @@ bool ContextImpl::WriteDescriptorSet(VkDescriptorSet set, const std::vector<Merg
 //////////////////////////////////////////////////////////////////////////////
 // pipelines
 
+// ===========================================================================
+// geometry shader emulation (src/rhi/gs_emulation.h)
+// ===========================================================================
+
+// The geometry shader the pipeline is about to drop, if one can be reproduced
+// instead.  Null whenever there is nothing to emulate, which is the common case.
+const EmulatedGeometryShader *ContextImpl::EmulationPlanFor(const ShaderCommon *gs) const
+{
+  if (!gs || gs->spirv.empty()) return nullptr;
+  if (phxvk::Vk().features.geometryShader != VK_FALSE) return nullptr;
+  static EmulatedGeometryShader plan;
+  if (!LookupEmulatedGeometryShader(gs->spirv.data(), gs->spirv.size() * sizeof(uint32_t), &plan)) return nullptr;
+  return &plan;
+}
+
+// Creates (once per geometry shader) the vertex stage that replaces it.
+ID3D11VertexShader *ContextImpl::EmulatedVertexShaderFor(const ShaderCommon *gs)
+{
+  const EmulatedGeometryShader *plan = EmulationPlanFor(gs);
+  if (!plan || !device) return nullptr;
+  auto it = emulatedVertexShaders.find(gs->contentHash);
+  if (it != emulatedVertexShaders.end()) return it->second;
+
+  ID3D11VertexShader *vs = nullptr;
+  const HRESULT hr = device->CreateVertexShader(plan->vertexSpirv.data(), plan->vertexSpirv.size() * sizeof(uint32_t), nullptr, &vs);
+  if (FAILED(hr) || !vs)
+  {
+    phxvk::LogError("[d3d11] could not create the emulated vertex shader for a geometry shader");
+    return nullptr;
+  }
+  emulatedVertexShaders[gs->contentHash] = vs;
+  return vs;
+}
+
 bool ContextImpl::PrepareDraw(VkPipeline *outPipeline, VkPipelineLayout *outLayout, std::vector<MergedBinding> *outBindings)
 {
   EnsureDummies();
@@ -1036,6 +1080,24 @@ bool ContextImpl::PrepareDraw(VkPipeline *outPipeline, VkPipelineLayout *outLayo
   PipelineKey key;
   // Content hashes, not handles: see PipelineKey.
   key.vs = stages[kStageVS].shader ? stages[kStageVS].shader->contentHash : 0;
+
+  // A geometry shader this device cannot run, but can reproduce, replaces the
+  // vertex stage and draws a triangle strip with primitive restart (the
+  // emulated stage rebuilds the strips the geometry shader would have streamed).
+  emulatedPipeline = false;
+  emulationPlan = nullptr;
+  if (stages[kStageGS].shader && phxvk::Vk().features.geometryShader == VK_FALSE)
+  {
+    if (ID3D11VertexShader *vs = EmulatedVertexShaderFor(stages[kStageGS].shader))
+    {
+      auto *impl = static_cast<VertexShaderImpl *>(vs);
+      key.vs = impl->contentHash;
+      key.emulated = true;
+      key.topology = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP;
+      emulatedPipeline = true;
+      emulationPlan = EmulationPlanFor(stages[kStageGS].shader);
+    }
+  }
   key.ps = stages[kStagePS].shader ? stages[kStagePS].shader->contentHash : 0;
   key.hs = stages[kStageHS].shader ? stages[kStageHS].shader->contentHash : 0;
   key.ds = stages[kStageDS].shader ? stages[kStageDS].shader->contentHash : 0;
@@ -1077,9 +1139,29 @@ bool ContextImpl::PrepareDraw(VkPipeline *outPipeline, VkPipelineLayout *outLayo
     return false;
   }
 
+  // The vertex stage that stands in for a geometry shader this device cannot
+  // run, and the shape its fat input has to match.
+  const EmulatedGeometryShader *emuPlan = nullptr;
+  VertexShaderImpl *emuVs = nullptr;
+  if (key.emulated && stages[kStageGS].shader)
+  {
+    emuPlan = EmulationPlanFor(stages[kStageGS].shader);
+    if (emuPlan)
+    {
+      if (ID3D11VertexShader *vs = EmulatedVertexShaderFor(stages[kStageGS].shader))
+        emuVs = static_cast<VertexShaderImpl *>(vs);
+    }
+    if (!emuPlan || !emuVs)
+    {
+      phxvk::LogError("draw: the geometry shader was marked emulated but its replacement is gone");
+      return false;
+    }
+  }
+
   std::vector<VkPipelineShaderStageCreateInfo> stagesCi;
   auto addStage = [&](VkShaderStageFlagBits bit, int stageIndex) {
     const ShaderCommon *shader = stages[stageIndex].shader;
+    if (emuVs && stageIndex == kStageVS) shader = emuVs;
     if (!shader || shader->module == VK_NULL_HANDLE) return;
     VkPipelineShaderStageCreateInfo ci{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
     ci.stage = bit;
@@ -1142,22 +1224,56 @@ bool ContextImpl::PrepareDraw(VkPipeline *outPipeline, VkPipelineLayout *outLayo
       if (in.location == location) return true;
     return false;
   };
+
+  // An emulated geometry shader reads every vertex of its input primitive in
+  // one vertex, declared as `struct { VSIN a0; VSIN a1; ... }`, so the shader's
+  // input locations are the original element list repeated `reps` times in
+  // order, with the offsets moved into each repetition's slab of the fat vertex.
+  const UINT reps = (key.emulated && emuPlan) ? (UINT)emuPlan->program.inputVertices : 1;
+
+  // Stride of one *original* vertex, derived exactly as the binding description
+  // below does it, so the fat attribute offsets and the fat binding stride
+  // agree with the buffer DrawInternal binds.
+  UINT baseStride = 0;
   if (il)
   {
+    baseStride = vertexStrides[0];
+    if (!baseStride)
+      for (UINT j = 0; j < il->elements.size(); j++)
+      {
+        if (il->elements[j].InputSlot != 0) continue;
+        const UINT bpp = DXGIFormatBitsPerPixel(il->elements[j].Format);
+        const UINT end = il->elements[j].AlignedByteOffset + (bpp ? bpp / 8 : 0);
+        if (end > baseStride) baseStride = end;
+      }
+  }
+
+  if (il)
+  {
+    for (UINT rep = 0; rep < reps; rep++)
     for (UINT i = 0; i < il->elements.size(); i++)
     {
       const D3D11_INPUT_ELEMENT_DESC &e = il->elements[i];
-      if (!shaderReadsLocation(i)) continue;
+      // Every repetition is read by the emulated stage, whatever the original
+      // vertex shader consumed.
+      if (reps == 1 && !shaderReadsLocation(i)) continue;
       VkVertexInputAttributeDescription a{};
-      a.location = i;
+      a.location = rep * (UINT)il->elements.size() + i;
       a.binding = e.InputSlot;
       a.format = DXGIFormatToVk(e.Format);
       a.offset = e.AlignedByteOffset;
-      if (a.format == VK_FORMAT_UNDEFINED)
+      if (a.format == VK_FORMAT_UNDEFINED && reps == 1)
       {
         // Fall back to the type the SPIR-V declares for this location.
         for (auto &in : il->vertexReflection.inputs)
           if (in.location == i && in.format != VK_FORMAT_UNDEFINED) a.format = in.format;
+      }
+      if (reps > 1)
+      {
+        // The repetition's slab of the fat vertex.  The slab size is the
+        // stride the draw will bind, which is not known until then; the
+        // draw-time stride and this offset are derived from the same value.
+        a.offset = (UINT)((uint64_t)rep * baseStride + e.AlignedByteOffset);
       }
       if (a.format == VK_FORMAT_UNDEFINED)
       {
@@ -1175,6 +1291,9 @@ bool ContextImpl::PrepareDraw(VkPipeline *outPipeline, VkPipelineLayout *outLayo
           VkVertexInputBindingDescription bd{};
           bd.binding = e.InputSlot;
           bd.stride = (e.InputSlot < 16 && vertexStrides[e.InputSlot]) ? vertexStrides[e.InputSlot] : 0;
+          // The emulated stage reads `reps` original vertices per vertex, so
+          // the binding it is fed is that many times as wide.
+          if (reps > 1 && e.InputSlot == 0) bd.stride = baseStride * reps;
           bd.inputRate = e.InputSlotClass == D3D11_INPUT_PER_INSTANCE_DATA ? VK_VERTEX_INPUT_RATE_INSTANCE : VK_VERTEX_INPUT_RATE_VERTEX;
           if (bd.stride == 0)
           {
@@ -1204,8 +1323,11 @@ bool ContextImpl::PrepareDraw(VkPipeline *outPipeline, VkPipelineLayout *outLayo
 
   VkPipelineInputAssemblyStateCreateInfo inputAssembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
   uint32_t patchControlPoints = 0;
-  inputAssembly.topology = ToVkTopology(key.topology, &patchControlPoints);
-  inputAssembly.primitiveRestartEnable = VK_FALSE;
+  inputAssembly.topology = key.emulated ? VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP : ToVkTopology(key.topology, &patchControlPoints);
+  // The emulated strip is rebuilt from the index buffer, and its restarts are
+  // what separate the strips the geometry shader streamed.
+  inputAssembly.primitiveRestartEnable = (key.emulated && emuPlan && !emuPlan->program.restartsAfter.empty()) ? VK_TRUE : VK_FALSE;
+  if (key.emulated) patchControlPoints = 0;
   if (inputAssembly.topology == VK_PRIMITIVE_TOPOLOGY_PATCH_LIST && patchControlPoints == 0) patchControlPoints = 1;
 
   VkPipelineViewportStateCreateInfo viewportState{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
@@ -1816,6 +1938,96 @@ bool ContextImpl::DrawInternal(bool indexed, UINT count, UINT instanceCount, UIN
   VkCommandBuffer cmd = phxvk::FrameCommandBuffer();
   vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
 
+  // ---------------------------------------------------------------------
+  // Geometry shader emulation.  The draw's own geometry is replaced by the fat
+  // expansion the emulated vertex stage reads: one vertex per emitted vertex,
+  // each carrying every vertex of the input primitive, indexed as the triangle
+  // strip the geometry shader would have streamed.  See gs_emulation.h.
+  // ---------------------------------------------------------------------
+  VkBuffer emuVb = VK_NULL_HANDLE;
+  VkDeviceSize emuVbOffset = 0;
+  uint32_t emuVbStride = 0;
+  VkBuffer emuIb = VK_NULL_HANDLE;
+  VkDeviceSize emuIbOffset = 0;
+  uint32_t emuIndexCount = 0;
+  if (emulatedPipeline && emulationPlan && indexed)
+  {
+    auto *vb = vertexBuffers[0] ? static_cast<BufferImpl *>(vertexBuffers[0]) : nullptr;
+    auto *ib = indexBuffer ? static_cast<BufferImpl *>(indexBuffer) : nullptr;
+    if (!vb || !ib || vb->shadow.empty() || ib->shadow.empty() || vertexStrides[0] == 0)
+    {
+      static Once once;
+      if (once())
+        phxvk::LogWarn("[d3d11] cannot emulate the geometry shader for a draw without readable vertex and index data");
+      return false;
+    }
+    if (baseVertex != 0 || instanceCount > 1)
+    {
+      static Once once;
+      if (once())
+        phxvk::LogWarn("[d3d11] geometry shader emulation ignores a non-zero base vertex or instancing");
+      return false;
+    }
+
+    phxvk::FatGeometry fat;
+    std::string err;
+    if (!phxvk::BuildFatGeometry(emulationPlan->program, vb->shadow.data(), vb->shadow.size(), vertexStrides[0],
+                                 indexFormat == DXGI_FORMAT_R32_UINT, ib->shadow.data(), count, startIndex, fat, &err))
+    {
+      static Once once;
+      if (once()) phxvk::LogWarn("[d3d11] geometry shader emulation could not build the fat geometry: %s", err.c_str());
+      return false;
+    }
+
+    // Built once per distinct draw: the source buffers are load-time meshes and
+    // do not change, and the expansion is orders of magnitude too large to
+    // rebuild into the per-frame ring on every draw (it exhausted it).
+    const uint64_t cacheKey = PhxHashCombine(
+        PhxHashCombine(stages[kStageGS].shader->contentHash, (uint64_t)(uintptr_t)vb),
+        PhxHashCombine((uint64_t)(uintptr_t)ib, ((uint64_t)count << 32) ^ (uint64_t)startIndex));
+    auto cached = emulatedGeometryCache.find(cacheKey);
+    if (cached == emulatedGeometryCache.end())
+    {
+      EmulatedGeometry entry;
+      entry.vbo = phxvk::CreateBuffer(fat.vertices.size(), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &entry.vboMemory);
+      entry.ibo = phxvk::CreateBuffer(fat.indices.size() * sizeof(uint32_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &entry.iboMemory);
+      if (!entry.vbo || !entry.ibo)
+      {
+        static Once once;
+        if (once()) phxvk::LogWarn("[d3d11] geometry shader emulation could not allocate its buffers");
+        return false;
+      }
+      void *vmap = MapStagingMemoryRange(entry.vboMemory, 0, fat.vertices.size());
+      void *imap = MapStagingMemoryRange(entry.iboMemory, 0, fat.indices.size() * sizeof(uint32_t));
+      if (!vmap || !imap)
+      {
+        static Once once;
+        if (once()) phxvk::LogWarn("[d3d11] geometry shader emulation could not map its buffers");
+        return false;
+      }
+      memcpy(vmap, fat.vertices.data(), fat.vertices.size());
+      memcpy(imap, fat.indices.data(), fat.indices.size() * sizeof(uint32_t));
+      vkUnmapMemory(phxvk::Vk().device, entry.vboMemory);
+      vkUnmapMemory(phxvk::Vk().device, entry.iboMemory);
+      entry.indexCount = (uint32_t)fat.indices.size();
+      entry.vertexStride = (uint32_t)(vertexStrides[0] * (uint32_t)emulationPlan->program.inputVertices);
+      cached = emulatedGeometryCache.emplace(cacheKey, entry).first;
+    }
+    const EmulatedGeometry &geo = cached->second;
+    emuVb = geo.vbo;
+    emuIb = geo.ibo;
+    emuIndexCount = geo.indexCount;
+    emuVbStride = geo.vertexStride;
+
+    static int logged = 0;
+    if (logged++ < 4)
+      phxvk::LogWarn("[d3d11] geometry shader emulated at draw: %u -> %u vertices, %u indices (%s in x%d)",
+                     count, fat.vertexCount, emuIndexCount, emulationPlan->program.inputVertices == 2 ? "line" : "prim",
+                     emulationPlan->program.inputVertices);
+  }
+
   VkDescriptorSet set = AllocateDescriptorSet(lastSetLayout);
   if (set == VK_NULL_HANDLE) return false;
   std::vector<uint32_t> dynamicOffsets;
@@ -1826,6 +2038,12 @@ bool ContextImpl::DrawInternal(bool indexed, UINT count, UINT instanceCount, UIN
   // binding all of them keeps dynamic vertex input simple.
   for (UINT i = 0; i < 16; i++)
   {
+    if (emuVb != VK_NULL_HANDLE)
+    {
+      // The fat buffer replaces every slot of the original geometry.
+      if (i == 0) vkCmdBindVertexBuffers(cmd, 0, 1, &emuVb, &emuVbOffset);
+      continue;
+    }
     if (!vertexBuffers[i]) continue;
     auto *buf = static_cast<BufferImpl *>(vertexBuffers[i]);
     VkBuffer vkBuf = buf->boundBuffer();
@@ -1841,6 +2059,14 @@ bool ContextImpl::DrawInternal(bool indexed, UINT count, UINT instanceCount, UIN
       static Once once;
       if (once()) phxvk::LogWarn("[d3d11] DrawIndexed with no index buffer bound; ignoring");
       return false;
+    }
+    if (emuIb != VK_NULL_HANDLE)
+    {
+      // The emulated strip is always 32-bit, and its indices already account
+      // for startIndex, so the draw starts at zero.
+      vkCmdBindIndexBuffer(cmd, emuIb, emuIbOffset, VK_INDEX_TYPE_UINT32);
+      vkCmdDrawIndexed(cmd, emuIndexCount, 1, 0, 0, 0);
+      return true;
     }
     auto *buf = static_cast<BufferImpl *>(indexBuffer);
     VkBuffer vkBuf = buf->boundBuffer();

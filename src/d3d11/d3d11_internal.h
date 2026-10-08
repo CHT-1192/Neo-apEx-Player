@@ -11,6 +11,7 @@
 #include <vulkan/vulkan.h>
 
 #include "../rhi/shader_compiler.h"
+#include "../rhi/gs_emulation.h"
 #include "../rhi/vk_core.h"
 #include "vk_swapchain.h"
 
@@ -19,6 +20,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace phxd3d11
@@ -73,10 +75,18 @@ struct ShaderReflectionRecord
 // blob (the design requires the blob payload to be raw SPIR-V).
 void RegisterShaderReflection(const void *spirv, size_t size, const ShaderReflectionRecord &rec);
 
-// The vertex stage that stands in for a geometry shader Metal cannot run,
-// keyed by that geometry shader's SPIR-V.  See src/rhi/gs_emulation.h.
-void RegisterEmulatedVertexShader(const void *gsSpirv, size_t gsSize, const std::vector<uint32_t> &vsSpirv);
-bool LookupEmulatedVertexShader(const void *gsSpirv, size_t gsSize, std::vector<uint32_t> *out);
+// The replacement for a geometry shader Metal cannot run: the vertex stage
+// that stands in for it, plus the geometry shader's parsed shape (which the
+// draw path needs to build the fat geometry).  Keyed by the geometry shader's
+// SPIR-V, so pipeline creation and DrawInternal can find it from the shader the
+// engine bound.  See src/rhi/gs_emulation.h.
+struct EmulatedGeometryShader
+{
+  std::vector<uint32_t> vertexSpirv;
+  phxvk::GsProgram program;
+};
+void RegisterEmulatedGeometryShader(const void *gsSpirv, size_t gsSize, const EmulatedGeometryShader &emu);
+bool LookupEmulatedGeometryShader(const void *gsSpirv, size_t gsSize, EmulatedGeometryShader *out);
 bool LookupShaderReflection(const void *spirv, size_t size, ShaderReflectionRecord *out);
 
 // Blobs (d3d11_blob.cpp).
@@ -646,6 +656,10 @@ struct PipelineKey
   uint64_t layout = 0;                           // input layout content hash
   uint64_t blend = 0, depthStencil = 0, rasterizer = 0;
   D3D11_PRIMITIVE_TOPOLOGY topology = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
+  // Set when this pipeline stands in for a geometry shader the device cannot
+  // run: its vertex stage is the emulated one, its input is the fat layout and
+  // it draws triangle strips with primitive restart.  See gs_emulation.h.
+  bool emulated = false;
   VkFormat color[8] = {};
   UINT colorCount = 0;
   VkFormat depth = VK_FORMAT_UNDEFINED;
@@ -662,6 +676,7 @@ struct PipelineKey
     if (depthStencil != o.depthStencil) return depthStencil < o.depthStencil;
     if (rasterizer != o.rasterizer) return rasterizer < o.rasterizer;
     if (topology != o.topology) return topology < o.topology;
+    if (emulated != o.emulated) return emulated < o.emulated;
     if (colorCount != o.colorCount) return colorCount < o.colorCount;
     for (UINT i = 0; i < colorCount; i++)
       if (color[i] != o.color[i]) return color[i] < o.color[i];
@@ -684,6 +699,28 @@ struct ContextImpl : public ID3D11DeviceContext, public ObjectBase
   ID3D11UnorderedAccessView *omUav[kMaxUAVs] = {};
   UINT omUavStart = 0;
   UINT omUavCount = 0;
+
+  // Geometry shader emulation (src/rhi/gs_emulation.h).  `emulatedPipeline`
+  // is set by PrepareDraw for the draw that follows it.
+  const EmulatedGeometryShader *emulationPlan = nullptr;
+  bool emulatedPipeline = false;
+  ID3D11VertexShader *EmulatedVertexShaderFor(const ShaderCommon *gs);
+  const EmulatedGeometryShader *EmulationPlanFor(const ShaderCommon *gs) const;
+  std::unordered_map<uint64_t, ID3D11VertexShader *> emulatedVertexShaders;
+
+  // The fat geometry for one draw, built once.  The engine's mesh buffers are
+  // built at load time and never change, so the expansion is stable across
+  // frames and is far too large to rebuild into the per-frame ring every time.
+  struct EmulatedGeometry
+  {
+    VkBuffer vbo = VK_NULL_HANDLE;
+    VkDeviceMemory vboMemory = VK_NULL_HANDLE;
+    VkBuffer ibo = VK_NULL_HANDLE;
+    VkDeviceMemory iboMemory = VK_NULL_HANDLE;
+    uint32_t indexCount = 0;
+    uint32_t vertexStride = 0;
+  };
+  std::unordered_map<uint64_t, EmulatedGeometry> emulatedGeometryCache;
 
   ID3D11InputLayout *inputLayout = nullptr;
   ID3D11Buffer *vertexBuffers[16] = {};
