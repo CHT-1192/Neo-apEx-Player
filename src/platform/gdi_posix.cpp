@@ -1125,16 +1125,50 @@ UniChar Cp1252ToUniChar(unsigned char c)
 CGGlyph GlyphForChar(GdiFont *font, UINT uChar, bool glyphIndex, bool &mapped)
 {
   mapped = true;
-  if (glyphIndex || font->symbol)
+
+  // A character that reached us through the engine's `char *` text is
+  // sign-extended, so every byte >= 0x80 arrives as 0xFFFFFFxx.  Win32 never
+  // sees that -- the ANSI entry point takes the low byte -- and the widened
+  // value then misses the symbol cmap (0xFFE7 instead of 0xE7, past the end of
+  // the face) and the Unicode cmap alike, so the glyph collapses to .notdef.
+  // Narrow it back before anything looks at it.
+  if (!glyphIndex && uChar > 0xFFu && (uChar & 0xFFFFFF00u) == 0xFFFFFF00u)
+    uChar &= 0xFFu;
+
+  if (glyphIndex)
   {
-    // GGO_GLYPH_INDEX is Win32's "the code is already an index", and
-    // SYMBOL_CHARSET selects the symbol cmap, where Win32 indexes the font's
-    // glyph space with the byte code.  macOS ships no Wingdings/Webdings, so
-    // for those two faces this is the closest available behaviour: the byte is
-    // used as a glyph index in the substituted face (giving decorative symbol
-    // shapes rather than whatever letter that face maps the byte to).  The
-    // substitution itself is logged by CreateCTFont.
-    const CGGlyph g = (CGGlyph)(uChar & 0xFFFF);
+    // GGO_GLYPH_INDEX: the caller resolved the character already and what it
+    // passes is a genuine 16-bit glyph index.
+    const CGGlyph g = (CGGlyph)( uChar & 0xFFFFu );
+    if (g >= (CGGlyph)CTFontGetGlyphCount(font->ct))
+    {
+      LogOnce("glyph.symbolrange", "GetGlyphOutline/TextOut: glyph index %u is beyond the %ld glyphs of the selected face; using glyph 0 (.notdef)",
+              (unsigned)g, (long)CTFontGetGlyphCount(font->ct));
+      mapped = false;
+      return 0;
+    }
+    return g;
+  }
+
+  if (font->symbol)
+  {
+    // SYMBOL_CHARSET.  Win32 looks the byte up in the font's symbol cmap; the
+    // glyph index is NOT the byte.  Treating it as one is what made Clean
+    // Slate's Webdings frames come out as people: Webdings 0x63 is the tall
+    // rectangular frame the demo draws, while glyph 0x63 of the same face is an
+    // unrelated symbol.  Windows symbol cmaps are keyed at U+F000 + byte, and
+    // the faces Apple ships also answer to the plain character, so try both
+    // before falling back to the old byte-as-index guess.
+    const unsigned char byte = (unsigned char)( uChar & 0xFFu );
+    const UniChar candidates[ 2 ] = { Cp1252ToUniChar( byte ), (UniChar)( 0xF000u | byte ) };
+    for ( int i = 0; i < 2; i++ )
+    {
+      CGGlyph g = 0;
+      if ( CTFontGetGlyphsForCharacters( font->ct, &candidates[ i ], &g, 1 ) && g )
+        return g;
+    }
+
+    const CGGlyph g = (CGGlyph)byte;
     if (g >= (CGGlyph)CTFontGetGlyphCount(font->ct))
     {
       LogOnce("glyph.symbolrange", "GetGlyphOutline/TextOut: glyph index %u is beyond the %ld glyphs of the selected face; using glyph 0 (.notdef)",

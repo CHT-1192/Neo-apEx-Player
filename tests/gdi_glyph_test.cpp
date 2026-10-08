@@ -600,6 +600,67 @@ int main()
     DeleteObject(missing);
   }
 
+  // ---------------------------------------------------------------------
+  // Section 1b: SYMBOL_CHARSET.  The byte selects a glyph through the face's
+  // symbol cmap; it is NOT the glyph index.
+  //
+  // Clean Slate draws the stack of frames at 1:18 through exactly this path
+  // (Webdings 'c' at font index 21 of the engine list, SYMBOL_CHARSET).  Two
+  // things were wrong here and both are silent -- they just produce the wrong
+  // shape:
+  //
+  //   * reading the byte as a glyph index picked an unrelated symbol, so the
+  //     frame came out as a person;
+  //   * `*Text` is a `char`, so 0xE7 arrives sign-extended as 0xFFFFFFE7, which
+  //     missed the face and collapsed to .notdef (a box) -- the whole Wingdings
+  //     half of the demo.
+  //
+  // Webdings and Wingdings ship with macOS in
+  // /System/Library/Fonts/Supplemental, so this is testable rather than a
+  // documented limitation.
+  // ---------------------------------------------------------------------
+  {
+    struct Outline
+    {
+      GLYPHMETRICS gm{};
+      std::vector<unsigned char> data;
+    };
+    auto outline = [&](DWORD charset, UINT ch) -> Outline {
+      Outline o;
+      HFONT f = CreateFontA(32, 0, 0, 0, 0, 0, 0, 0, charset, 0, 0, 0, 0, "Webdings");
+      if (!f) return o;
+      HGDIOBJ prev = SelectObject(hdc, f);
+      const DWORD kError = ~(DWORD)0; // GDI_ERROR, as gdi_posix returns it
+      DWORD n = GetGlyphOutline(hdc, ch, GGO_NATIVE, &o.gm, 0, nullptr, nullptr);
+      if (n != kError && n != 0)
+      {
+        o.data.resize(n, 0);
+        n = GetGlyphOutline(hdc, ch, GGO_NATIVE, &o.gm, n, o.data.data(), nullptr);
+        if (n == kError) o.data.clear();
+      }
+      SelectObject(hdc, prev);
+      DeleteObject(f);
+      return o;
+    };
+
+    const Outline viaSymbol = outline(SYMBOL_CHARSET, 'c');
+    const Outline viaUnicode = outline(DEFAULT_CHARSET, 'c');
+    Check(!viaSymbol.data.empty(), "SYMBOL_CHARSET GetGlyphOutline(Webdings, 'c') produced no outline");
+    Check(viaSymbol.data == viaUnicode.data,
+          "SYMBOL_CHARSET 'c' does not match the face's own cmap lookup: the byte is being used as a glyph index (%zu vs %zu bytes)",
+          viaSymbol.data.size(), viaUnicode.data.size());
+
+    // A byte >= 0x80 reaches the port sign-extended out of the engine's char*.
+    // Win32 truncates it to the low byte, so both spellings must agree.
+    const Outline narrow = outline(SYMBOL_CHARSET, 0xE7);
+    const Outline widened = outline(SYMBOL_CHARSET, 0xFFFFFFE7u);
+    Check(!narrow.data.empty(), "SYMBOL_CHARSET GetGlyphOutline(Webdings, 0xE7) produced no outline");
+    Check(narrow.data == widened.data,
+          "a sign-extended symbol character (0xFFFFFFE7) did not narrow to its low byte (0xE7)");
+    Check(narrow.gm.gmBlackBoxX != viaSymbol.gm.gmBlackBoxX || narrow.gm.gmBlackBoxY != viaSymbol.gm.gmBlackBoxY,
+          "Webdings 0xE7 and 'c' resolved to the same glyph; the cmap is not being consulted");
+  }
+
   const unsigned char chars[3] = { 'A', 'g', '.' };
   GlyphRun runs[3];
   for (int i = 0; i < 3; i++)

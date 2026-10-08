@@ -527,6 +527,43 @@ int main(int argc, char **argv)
   }
 
   // ---------------------------------------------------------------------
+  // Diagnostic: switch individual timeline events off.
+  //
+  // APEX_DISABLE_EVENT=<index>[,<index>...] or `all-<type>` collapses an event
+  // to zero length, which is enough to take it out of the frame: the timeline
+  // only renders events whose [StartFrame, EndFrame) contains the frame.  This
+  // is how a scene gets attributed to the event that draws it, without
+  // guessing from the .apx.
+  if (const char *spec = getenv("APEX_DISABLE_EVENT"))
+  {
+    const int count = (int)Project.Timeline->Events.NumItems();
+    auto disable = [&](int i) {
+      if (i < 0 || i >= count) return;
+      CphxEvent_Tool *e = Project.Timeline->Events[i];
+      if (!e || !e->Event) return;
+      phxvk::LogWarn("diagnostic: event %d (type %d) disabled", i, (int)e->Type);
+      e->Event->EndFrame = e->Event->StartFrame;
+    };
+    std::string s(spec);
+    if (s.rfind("all-", 0) == 0)
+    {
+      const int type = atoi(s.c_str() + 4);
+      for (int i = 0; i < count; i++)
+        if ((int)Project.Timeline->Events[i]->Type == type) disable(i);
+    }
+    else
+    {
+      for (size_t pos = 0; pos < s.size();)
+      {
+        size_t comma = s.find(',', pos);
+        disable(atoi(s.substr(pos, comma - pos).c_str()));
+        if (comma == std::string::npos) break;
+        pos = comma + 1;
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------
   // Create the demo's render targets and point the timeline at them.
   //
   // This is the piece the tool UI used to do.  CphxTimeline::Render() blits to
@@ -574,14 +611,26 @@ int main(int argc, char **argv)
                      (int)Project.Timeline->Events[i]->Event->EndFrame,
                      (int)Project.Timeline->Events[i]->Pass);
     // Which events are live around frame 6000, where the frame time explodes?
-    phxvk::LogInfo("events active in [5000, 6200):");
+    // Which events are live around the first frame that will be drawn?  With
+    // --start-frame that is the frame the caller asked about, which is what
+    // makes this usable when a particular scene looks wrong.  (It used to be
+    // pinned to [5000, 6200), the frame the old stall was found at.)
+    const int probeFrom = (int)opt.startFrame;
+    const int probeTo = probeFrom + 600;
+    phxvk::LogInfo("events active in [%d, %d)  (%d.%02ds..%d.%02ds):", probeFrom, probeTo, probeFrom / 120,
+                   (probeFrom % 120) * 100 / 120, probeTo / 120, (probeTo % 120) * 100 / 120);
     for (TS32 i = 0; i < Project.Timeline->Events.NumItems(); i++)
     {
       const int a = Project.Timeline->Events[i]->Event->StartFrame;
       const int b = Project.Timeline->Events[i]->Event->EndFrame;
-      if (b > 5000 && a < 6200)
-        phxvk::LogInfo("  event %d: type %d frames [%d, %d)", (int)i,
-                       (int)Project.Timeline->Events[i]->Type, a, b);
+      if (b > probeFrom && a < probeTo)
+      {
+        CphxEvent_Tool *ev = Project.Timeline->Events[i];
+        const char *name = ev->Name.GetPointer();
+        phxvk::LogInfo("  event %d: type %d frames [%d, %d)  %s%s%s", (int)i, (int)ev->Type, a, b,
+                       (name && *name) ? "name=" : "", (name && *name) ? name : "",
+                       ev->Event->Target ? " (has target)" : "");
+      }
     }
   }
 
