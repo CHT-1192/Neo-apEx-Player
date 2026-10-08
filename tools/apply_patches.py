@@ -515,22 +515,25 @@ private:""",
         "\n"
         "  TF32 aspect = ( tax*max*say ) / (TF32)( tay*may*sax );",
         "  // [port] Config::MonitorAspectX/Y came from the unvendored editor header\n"
-        "  // ../apEx/Config.h.  The editor divided the monitor resolution stored in its\n"
-        "  // own config by the real screen metrics so that the preview window's\n"
-        "  // aspect correction matched the configured (possibly non-native) monitor.  A\n"
-        "  // player has no editor config, so the two factors cancel and `aspect` becomes\n"
-        "  // the timeline's own aspect - the aspect the demo is authored for.\n"
-        "  // LOUD: this IS a behaviour change if the editor config used a monitor\n"
-        "  // resolution that differs from the actual screen; the resulting\n"
-        "  // aspect-corrected render-target sizes would then differ from the editor's.\n"
-        "  // Nothing else in the collection depends on it.  See the port report.\n"
+        "  // ../apEx/Config.h: the resolution of the monitor the user said they were\n"
+        "  // viewing on.  The editor wrote it from its own settings dialog; the release\n"
+        "  // player asks the same question in its setup dialog (\"Monitor Aspect\"), so\n"
+        "  // the port keeps the answer in src/platform/phx_monitor_aspect.* and reads it\n"
+        "  // here at runtime instead of hard-coding the screen.  0,0 means \"auto\", i.e.\n"
+        "  // the real screen - the value this used to be fixed to, and the one that\n"
+        "  // makes the correction factor 1 and `aspect` the timeline's authored aspect.\n"
         "  TS32 sax = GetSystemMetrics( SM_CXSCREEN );\n"
         "  TS32 say = GetSystemMetrics( SM_CYSCREEN );\n"
         "  TS32 max = sax;\n"
         "  TS32 may = say;\n"
         "\n"
+        "  extern void PhxMonitorAspect( TS32 *x, TS32 *y );\n"
+        "  PhxMonitorAspect( &max, &may );\n"
+        "\n"
         "  TF32 aspect = ( tax*max*say ) / (TF32)( tay*may*sax );",
-        "Config::MonitorAspectX/Y is editor config; with no editor the configured monitor resolution is taken to be the real screen, so the correction factor is 1 and the timeline aspect is used as authored.",
+        "Config::MonitorAspectX/Y is editor config; the release setup dialog asks the "
+        "same question, so the resolution it selects now reaches the aspect-corrected "
+        "render-target size through src/platform/phx_monitor_aspect.*.",
     ),
     (
         "Phoenix_Tool/Model_Tool.h",

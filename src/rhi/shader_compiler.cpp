@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <cstring>
+#include <mutex>
+#include <unordered_map>
 #include <map>
 #include <set>
 #include <sstream>
@@ -76,6 +78,11 @@ const ResourceType kResourceTypes[] = {
     {"ConstantBuffer", RegisterClass::ConstantBuffer},
     {"SamplerComparisonState", RegisterClass::Sampler},
     {"SamplerState", RegisterClass::Sampler},
+    // The legacy lowercase `sampler` keyword.  Dear ImGui's pixel shader uses it
+    // ("sampler sampler0; Texture2D texture0;"), and without an entry here it
+    // received no binding and defaulted to 0, colliding with the constant buffer
+    // at binding 0 - the UI then sampled the constant buffer as its font atlas.
+    {"sampler", RegisterClass::Sampler},
     {"RWBuffer", RegisterClass::UAV},
     {"Buffer", RegisterClass::Texture},
     {"cbuffer", RegisterClass::ConstantBuffer},
@@ -144,6 +151,16 @@ std::string RewriteHLSLForVulkan(const std::string &hlsl)
 {
   std::string out;
   out.reserve(hlsl.size() + 512);
+
+  // D3D11 numbers each register class independently, in declaration order, for
+  // declarations that do not name a register.  The engine's own shaders always
+  // write `: register(xN)` explicitly, so this only matters for third-party HLSL
+  // - Dear ImGui's pixel shader declares `Texture2D texture0;` and
+  // `SamplerState sampler0;` with no register at all, and without this they
+  // received no [[vk::binding]] and all landed on binding 0 together with the
+  // constant buffer.  The shader then sampled the constant buffer as a texture,
+  // which is what the striped garbage on screen was.
+  uint32_t nextRegister[4] = {0, 0, 0, 0}; // indexed by RegisterClass
 
   size_t i = 0;
   const size_t n = hlsl.size();
@@ -258,6 +275,11 @@ std::string RewriteHLSLForVulkan(const std::string &hlsl)
 
           if (rewrite)
           {
+            // An explicit register fixes that slot; later implicit declarations
+            // continue after it, exactly as D3D11 does.
+            const uint32_t clsIndex = (uint32_t)cls;
+            if (clsIndex < 4 && index + 1 > nextRegister[clsIndex]) nextRegister[clsIndex] = index + 1;
+
             char attr[64];
             snprintf(attr, sizeof(attr), "[[vk::binding(%u,0)]] ", BindingFor(cls, index));
             out.append(attr);
@@ -272,7 +294,18 @@ std::string RewriteHLSLForVulkan(const std::string &hlsl)
       }
     }
 
-    // No register() -> emit the keyword and carry on from just after it.
+    // No register(): D3D11 assigns the next free register of that class, so do
+    // the same and state it explicitly for glslang.
+    {
+      const uint32_t clsIndex = (uint32_t)matched->cls;
+      if (clsIndex < 4)
+      {
+        const uint32_t index = nextRegister[clsIndex]++;
+        char attr[64];
+        snprintf(attr, sizeof(attr), "[[vk::binding(%u,0)]] ", BindingFor(matched->cls, index));
+        out.append(attr);
+      }
+    }
     out.append(hlsl, i, kwEnd - i);
     i = kwEnd;
   }
@@ -735,10 +768,85 @@ static Reflection ReflectSpirv(const std::vector<uint32_t> &spirv)
 //////////////////////////////////////////////////////////////////////////////
 // compile
 
+namespace
+{
+
+// Is `name` defined as a function in this source?
+//
+// The engine compiles the SAME blob once per stage and lets the stages it does
+// not use fail - five attempts per technique, of which two or three can never
+// succeed.  glslang does not fail cheaply: it preprocesses, parses and links the
+// whole shader before reporting "entry point not found", which on a large
+// technique costs most of a second.  With 58 such guaranteed failures in a
+// 12-frame run, that was ~3.4 s per frame - the player was unusable from the
+// point a shadertoy event became active.
+//
+// "identifier followed by (" is a NECESSARY condition for a definition, so its
+// absence proves the entry point does not exist and we can skip shaderc
+// entirely.  A false positive only means we compile and fail as before, so this
+// can never break a shader that used to work.  The entry names here are single
+// letters ("v", "p", "g", "h", "d"), which is why the token boundaries matter.
+bool HasEntryPoint(const std::string &src, const char *name)
+{
+  if (!name || !*name) return true;
+  const size_t nameLen = strlen(name);
+  auto isIdent = [](char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+  };
+
+  for (size_t at = src.find(name); at != std::string::npos; at = src.find(name, at + 1))
+  {
+    if (at > 0 && isIdent(src[at - 1])) continue;
+    const size_t after = at + nameLen;
+    if (after < src.size() && isIdent(src[after])) continue;
+    size_t p = after;
+    while (p < src.size() && (src[p] == ' ' || src[p] == '\t' || src[p] == '\r' || src[p] == '\n')) p++;
+    if (p < src.size() && src[p] == '(') return true;
+  }
+  return false;
+}
+
+// Failed compiles are worth remembering: the engine retries the same
+// (source, entry, stage) triple on every material rebuild, which happens every
+// frame for shadertoy events.
+std::mutex g_failedMutex;
+std::set<std::string> g_failedKeys;
+
+std::string FailureKey(const std::string &src, const char *entry, int stage)
+{
+  const size_t h = std::hash<std::string>{}(src);
+  return std::to_string(h) + "|" + (entry ? entry : "") + "|" + std::to_string(stage);
+}
+
+} // namespace
+
 CompiledShader CompileHLSL(const char *source, size_t length, const char *entryPoint, ShaderStage stage, const char *debugName)
 {
   CompiledShader result;
   std::string src(source, length);
+
+  // Cheap rejection for the stages a technique does not implement, then a cache
+  // of previous failures, so neither costs a glslang run.  See HasEntryPoint().
+  if (!HasEntryPoint(src, entryPoint))
+  {
+    result.error = std::string("entry point '") + (entryPoint ? entryPoint : "") +
+                   "' is not defined in this shader source";
+    result.ok = false;
+    return result;
+  }
+
+  {
+    const std::string key = FailureKey(src, entryPoint, (int)stage);
+    std::lock_guard<std::mutex> lock(g_failedMutex);
+    auto it = g_failedKeys.find(key);
+    if (it != g_failedKeys.end())
+    {
+      result.error = "this (shader, entry point, stage) combination failed to compile before";
+      result.ok = false;
+      return result;
+    }
+  }
+
   std::string rewritten = RewriteHLSLForVulkan(src);
   result.rewrittenSource = rewritten;
 
@@ -764,6 +872,10 @@ CompiledShader CompileHLSL(const char *source, size_t length, const char *entryP
     const char *err = shaderc_result_get_error_message(res);
     result.error = err ? err : "unknown shader compilation error";
     result.ok = false;
+    {
+      std::lock_guard<std::mutex> lock(g_failedMutex);
+      g_failedKeys.insert(FailureKey(src, entryPoint, (int)stage));
+    }
   }
   else
   {

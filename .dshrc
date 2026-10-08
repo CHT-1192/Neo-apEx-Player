@@ -50,7 +50,9 @@ apexcompare() {
   local warm=30 start
   start=$((frame - warm))
   if [ "$start" -lt 0 ]; then start=0; warm=$frame; fi
-  "$player" "$apx" --no-audio --no-vsync --fixed-fps \
+  # --no-ui because the setup dialog is modal and belongs to a human: leaving it
+  # up would make this script wait forever for a click.
+  "$player" "$apx" --no-ui --no-audio --no-vsync --fixed-fps \
       --start-frame "$start" --frames $((warm + 1)) \
       --dump-frame "$warm"="$port" >/dev/null 2>&1
   [ -f "$port" ] || { echo "apexcompare: the player produced no frame" >&2; return 1; }

@@ -17,3 +17,34 @@ CString apexBuild(_T("Neo-apEx-Player (Vulkan port)"));
 // early when it is off.  Nothing in the player calls Pick(), and "enabled" is
 // the original default, so this preserves the upstream behaviour.
 bool pickingEnabled = true;
+
+// apxProject.cpp (CapexRenderTargetCollection::UpdateCollection) —
+// `Config::MonitorAspectX/Y`, which the editor's settings dialog wrote to its
+// config file.  The release player asks the same question in its setup dialog,
+// so the answer is a runtime value here rather than a compile-time constant.
+// See src/platform/phx_monitor_aspect.h for the full derivation; 0,0 is "auto"
+// and resolves to the real screen, which is what the port used to hard-code.
+namespace
+{
+int g_monitorAspectX = 0;
+int g_monitorAspectY = 0;
+} // namespace
+
+void PhxSetMonitorAspect(int x, int y)
+{
+  g_monitorAspectX = x > 0 ? x : 0;
+  g_monitorAspectY = y > 0 ? y : 0;
+}
+
+void PhxMonitorAspect(int *x, int *y)
+{
+  int sx = GetSystemMetrics(SM_CXSCREEN);
+  int sy = GetSystemMetrics(SM_CYSCREEN);
+  // GetSystemMetrics already falls back to 1920x1080 when CoreGraphics reports
+  // no pixels, but do not hand a zero to a division even if it stops doing so.
+  if (sx <= 0) sx = 1920;
+  if (sy <= 0) sy = 1080;
+
+  if (x) *x = g_monitorAspectX > 0 ? g_monitorAspectX : sx;
+  if (y) *y = g_monitorAspectY > 0 ? g_monitorAspectY : sy;
+}

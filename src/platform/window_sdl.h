@@ -68,5 +68,18 @@ extern "C" void PhxWindowSetPrimaryWindow(void *window);
 // filled from SDL_EVENT_KEY_DOWN/UP, so a compat GetKeyState() can forward to
 // it.  VK codes are the Win32 ones declared in win32_window_gap.h.
 
+// Optional UI event hook.
+//
+// The window layer translates SDL events into WM_* messages for the engine, and
+// nothing outside it sees them.  Dear ImGui needs to, so it can drive a setup
+// screen and know whether the pointer is over its own widgets.  The hook is
+// called for every event BEFORE that translation and returns true when the UI
+// consumed it, in which case the engine does not see the event at all.
+//
+// A free function rather than a virtual on CCoreWindowHandlerWin: that class is
+// vendored, and this is the whole of the interface the UI needs.
+using PhxSdlEventHook = bool (*)(const SDL_Event *event);
+void PhxWindowSetEventHook(PhxSdlEventHook hook);
+
 TS16 PhxWindowGetKeyState(TS32 virtualKey);
 TBOOL PhxWindowIsKeyDown(TS32 virtualKey);

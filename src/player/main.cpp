@@ -8,8 +8,11 @@
 // synthesise the music - but the song's tick timeline is fully recoverable from
 // the .mvm header, so the wall clock (src/player/song_clock.cpp) reproduces the
 // original timing exactly.
+#include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <thread>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -35,6 +38,9 @@ extern CArray<CphxResource *> UpdateQueue;
 #include "song_pcm.h"
 #include "RenderTarget.h"  // CphxRenderTarget
 #include "rhi/vk_core.h"
+#include "ui.h"                            // the setup dialog, in its own window
+#include "platform/phx_monitor_aspect.h"   // its "Monitor Aspect" answer, for the engine
+#include "XMLDocument.h"                   // the .apx's <Group>/<Title>, for the dialog
 
 // Defined in third_party/apEx/Phoenix/phxEngine.cpp and created by
 // D3D11CreateDeviceAndSwapChain (our shim).  The original MinimalPlayer
@@ -59,7 +65,8 @@ struct Options
   std::string song;         // explicit .mvm; default: <songfile> from the .apx
   int width = 0;            // 0 = derive from the project's aspect ratio
   int height = 0;
-  bool fullscreen = false;
+  bool fullscreen = false;  // --no-ui only; the dialog has its own default
+  bool windowed = false;    // pre-select the dialog's Fullscreen checkbox off
   bool vsync = true;
   bool validate = false;
   long long frames = -1;    // -1 = run until the song ends / window closes
@@ -69,6 +76,14 @@ struct Options
   std::vector<phxplayer::FrameDumpRequest> dumps; // --dump-frame N=path.ppm
   std::string music;   // --music FILE: explicit pre-rendered track
   bool noAudio = false; // --no-audio: never open an output device
+  int frameTimeoutMs = 5000; // --frame-timeout; 0 disables the watchdog
+  // The release player puts its setup dialog in front of everything else
+  // (apEx/MinimalPlayer/MinimalPlayer.cpp:147, `if ( OpenSetupDialog( Strings ) )`,
+  // and only then InitWindow), and this player does the same: src/player/ui.cpp
+  // owns its own SDL window and renderer, and is torn down before the engine's
+  // window or device exists.  --no-ui skips it, which is what scripted runs
+  // (ci/, tools/, --dump-frame) use.
+  bool enableUi = true;
 };
 
 static void Usage(const char *argv0)
@@ -77,8 +92,10 @@ static void Usage(const char *argv0)
           "usage: %s <project.apx> [options]\n"
           "\n"
           "  --song FILE          .mvm to take the timeline from (default: the project's <songfile>)\n"
-          "  --width N --height N window size (default: derived from <AspectX>/<AspectY>)\n"
-          "  --fullscreen         start fullscreen\n"
+          "  --width N --height N pre-select this mode in the setup dialog's Resolution\n"
+          "                       list; without the dialog, the window size\n"
+          "  --fullscreen         --no-ui only: start fullscreen\n"
+          "  --windowed           pre-select the setup dialog's Fullscreen box off\n"
           "  --frames N           render N frames and exit (deterministic)\n"
           "  --start-frame N      begin at frame N\n"
           "  --fixed-fps          ignore the clock; advance one frame per present\n"
@@ -87,6 +104,11 @@ static void Usage(const char *argv0)
           "  --music FILE         play a pre-rendered track (WAV, or the Windows\n"
           "                       tool's .apxsndcache) and drive the clock from it\n"
           "  --no-audio           never open an audio device\n"
+          "  --no-ui              skip the setup dialog and start playing immediately\n"
+          "                       (what the scripts in ci/ and tools/ pass)\n"
+          "  --frame-timeout MS   abort if a single frame exceeds MS (default 5000;\n"
+          "                       0 disables it).  A hung frame would otherwise take\n"
+          "                       the whole desktop with it.\n"
           "  --validate           enable Vulkan validation layers\n"
           "  --dump-frame N=FILE  write frame N to FILE as binary PPM (repeatable)\n",
           argv0);
@@ -114,10 +136,14 @@ static bool ParseArgs(int argc, char **argv, Options &o)
     else if (a == "--width") o.width = atoi(next("--width"));
     else if (a == "--height") o.height = atoi(next("--height"));
     else if (a == "--fullscreen") o.fullscreen = true;
+    else if (a == "--windowed") o.windowed = true;
     else if (a == "--vsync") o.vsync = true;
     else if (a == "--no-vsync") o.vsync = false;
     else if (a == "--music") o.music = next("--music");
     else if (a == "--no-audio") o.noAudio = true;
+    else if (a == "--frame-timeout") o.frameTimeoutMs = atoi(next("--frame-timeout"));
+    else if (a == "--ui") o.enableUi = true;
+    else if (a == "--no-ui") o.enableUi = false;
     else if (a == "--validate") o.validate = true;
     else if (a == "--frames") o.frames = atoll(next("--frames"));
     else if (a == "--start-frame") o.startFrame = atoll(next("--start-frame"));
@@ -160,6 +186,79 @@ static bool ParseArgs(int argc, char **argv, Options &o)
 
 // <songfile> in the .apx is a Windows-style path relative to the project
 // (".\\step010padding.mvm"), so normalise and resolve it next to the .apx.
+// Single-frame watchdog.
+//
+// A bug that makes one frame take minutes is not just slow, it takes the whole
+// machine with it: the process sits at 100% of a core and the window server
+// stops responding, so the only way out is Force Quit.  That happened here
+// (demo frame ~6008, for reasons still being narrowed down), and no amount of
+// "it should be faster" is an excuse for hanging someone's desktop.
+//
+// The watchdog runs on its own thread and, if a frame exceeds the budget, says
+// which frame it was stuck on and exits the process.  It is deliberately
+// unconditional: a player that cannot make progress should stop, not spin.
+class FrameWatchdog
+{
+public:
+  FrameWatchdog(int budgetMs, double fps) : budget(budgetMs), framerate(fps)
+  {
+    if (budgetMs <= 0) return;
+    Start();
+  }
+  ~FrameWatchdog()
+  {
+    running = false;
+    if (thread.joinable()) thread.join();
+  }
+
+  void Tick(long long frame)
+  {
+    if (budget <= 0) return;
+    currentFrame.store(frame, std::memory_order_relaxed);
+    frameStartMs.store(NowSteadyMs(), std::memory_order_relaxed);
+  }
+
+private:
+  static uint64_t NowSteadyMs()
+  {
+    using namespace std::chrono;
+    return (uint64_t)duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
+  }
+
+  void Start()
+  {
+    frameStartMs.store(NowSteadyMs(), std::memory_order_relaxed);
+    thread = std::thread([this]() {
+      while (running.load(std::memory_order_relaxed))
+      {
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        if (!running.load(std::memory_order_relaxed)) break;
+        const uint64_t start = frameStartMs.load(std::memory_order_relaxed);
+        const uint64_t now = NowSteadyMs();
+        if (now - start <= (uint64_t)budget) continue;
+
+        const long long f = currentFrame.load(std::memory_order_relaxed);
+        const double secs = (double)(now - start) / 1000.0;
+        fprintf(stderr,
+                "\n[phxvk error] frame %lld has been running for %.1f s (budget %d ms); "
+                "aborting rather than hanging the desktop.  Reproduce with --frames N and "
+                "lower --frame-timeout to get closer to the slow frame.\n",
+                f, secs, budget);
+        fflush(stderr);
+        _Exit(70);
+      }
+    });
+  }
+
+  int budget = 0;
+  double framerate = 120.0;
+  std::atomic<bool> running{true};
+  std::atomic<uint64_t> frameStartMs{0};
+  std::atomic<long long> currentFrame{0};
+  std::thread thread;
+};
+
+
 static std::string ResolveSongPath(const std::string &apxPath, const std::string &declared)
 {
   std::string s = declared;
@@ -173,6 +272,35 @@ static std::string ResolveSongPath(const std::string &apxPath, const std::string
   return dir + s;
 }
 
+// The setup dialog's two lines.
+//
+// The release player got them from the demo header it was compiled with -
+// MinimalPlayer.cpp:129-139 splits Strings[] out of the blob and hands
+// Strings[0]/Strings[1] (group, release) to OpenSetupDialog - because it had no
+// project file to read.  This player loads an .apx, which carries the same pair
+// in <Group> and <Title>, and CapexProject::ImportMain() reads exactly those two
+// elements (Phoenix_Tool/apxProject.cpp:476-477).  So parse the root element
+// only; the full import happens later, once there is a device to build into.
+static void ReadProjectStrings(const std::string &path, phxplayer::SetupInfo *info)
+{
+  CXMLDocument doc;
+  if (!doc.LoadFromFile((TCHAR *)path.c_str()))
+  {
+    phxvk::LogWarn("setup: could not read '%s' for the release name", path.c_str());
+    return;
+  }
+
+  CXMLNode root = doc.GetDocumentNode().GetChild((TCHAR *)"apExProject");
+  if (!root.IsValid())
+  {
+    phxvk::LogWarn("setup: '%s' has no <apExProject> root element", path.c_str());
+    return;
+  }
+
+  if (root.GetChildCount((TCHAR *)"Title")) info->title = root.GetChild((TCHAR *)"Title").GetText().GetPointer();
+  if (root.GetChildCount((TCHAR *)"Group")) info->group = root.GetChild((TCHAR *)"Group").GetText().GetPointer();
+}
+
 int main(int argc, char **argv)
 {
   Options opt;
@@ -183,14 +311,76 @@ int main(int argc, char **argv)
   phxvk::vkRequestValidation(opt.validate);
 
   // ---------------------------------------------------------------------
+  // The setup dialog, before anything that needs a display exists.
+  //
+  // apEx/MinimalPlayer runs this first and only then calls InitWindow(), with
+  // the resolution and fullscreen flag the dialog produced:
+  //
+  //   MinimalPlayer.cpp:147  if ( OpenSetupDialog( Strings ) )
+  //   MinimalPlayer.cpp:257  InitWindow( hInstance, setupcfg.mode.dmPelsWidth, ..., setupcfg.fullscreen )
+  //
+  // So nothing here may create a window, a device or a swap chain before it
+  // returns.  src/player/ui.cpp owns its own SDL window and SDL_Renderer (not
+  // the engine's, and not the Vulkan device) and tears them down again.
+  int winW = opt.width > 0 ? opt.width : 1280;
+  int winH = opt.height > 0 ? opt.height : 720;
+  bool winFullscreen = opt.fullscreen;
+  bool winVsync = opt.vsync;
+
+  if (opt.enableUi)
+  {
+    phxplayer::SetupInfo setupInfo;
+    ReadProjectStrings(opt.project, &setupInfo);
+
+    phxplayer::SetupChoice choice;
+    // The dialog opens with Fullscreen and V-sync both ticked
+    // (SetupDialog.cpp:123-124) and the Resolution list on whatever the desktop
+    // is running; 0 means "no preference" so that stays true unless the command
+    // line asked for a particular mode.
+    choice.width = opt.width;
+    choice.height = opt.height;
+    choice.fullscreen = !opt.windowed;
+    choice.vsync = winVsync;
+
+    if (phxplayer::RunSetupDialog(setupInfo, &choice))
+    {
+      if (!choice.go)
+      {
+        // The original falls through its `if ( OpenSetupDialog( Strings ) )` and
+        // returns 0 from WinMain.  There is nothing to unwind yet.
+        phxvk::LogInfo("setup: Quit; exiting without creating a window or a device");
+        return 0;
+      }
+      winW = choice.width;
+      winH = choice.height;
+      winFullscreen = choice.fullscreen;
+      winVsync = choice.vsync;
+      // The dialog's "Monitor Aspect" is the control the engine's aspect
+      // correction reads (see src/platform/phx_monitor_aspect.h).  It has to be
+      // set before the render-target collection is spawned, which happens after
+      // the project is imported.
+      PhxSetMonitorAspect(choice.monitorAspectX, choice.monitorAspectY);
+    }
+    else
+    {
+      phxvk::LogWarn("setup: the dialog could not be shown; using the command line's settings");
+      PhxSetMonitorAspect(0, 0);
+    }
+  }
+  else
+  {
+    // No dialog => the flags are the whole answer, and the monitor is the real
+    // one ("auto"), which is what the engine used to hard-code.
+    PhxSetMonitorAspect(0, 0);
+  }
+
+  // ---------------------------------------------------------------------
   // window + device
   //
   // CCoreWindowParameters deliberately does NOT create the device (the Win32
   // original leaked an implicit one); the player owns it.
-  const int defaultW = 1280;
-  const int defaultH = 720;
-  const int w = opt.width > 0 ? opt.width : defaultW;
-  const int h = opt.height > 0 ? opt.height : defaultH;
+  const int w = winW;
+  const int h = winH;
 
   // Order matters, and it is not the obvious one:
   //   * CCoreWindowHandlerWin::Initialize() copies params.Device into the
@@ -222,7 +412,7 @@ int main(int argc, char **argv)
   };
 
   PlayerWindow window;
-  CCoreWindowParameters params((HINSTANCE)0, opt.fullscreen ? 1 : 0, w, h,
+  CCoreWindowParameters params((HINSTANCE)0, winFullscreen ? 1 : 0, w, h,
                                (TCHAR *)"Neo-apEx-Player", (HICON)0, false, false);
   params.Device = &device;
 
@@ -293,6 +483,10 @@ int main(int argc, char **argv)
     memset(&srgbView, 0, sizeof(srgbView));
     srgbView.Format = DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
     srgbView.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+    // Diagnostic: APEX_NO_SRGB_BACKBUFFER=1 makes the view plain UNORM, so the
+    // pipeline and the attachment agree.  Used to tell a format mismatch apart
+    // from "the draw is not happening at all".
+    if (getenv("APEX_NO_SRGB_BACKBUFFER")) srgbView.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
     hr = phxDev->CreateRenderTargetView(backBuffer, &srgbView, &phxBackBufferView);
     if (FAILED(hr) || !phxBackBufferView)
     {
@@ -312,11 +506,17 @@ int main(int argc, char **argv)
   }
 
   // ---------------------------------------------------------------------
-  // load the project
-
-  CString apxPath(opt.project.c_str());
-  Project.Import(apxPath, (HWND)0);
-  phxvk::LogInfo("project imported: %s", opt.project.c_str());
+  // Load the project.
+  //
+  // (This was accidentally removed together with the abandoned in-window UI
+  // block: the cut ran from the UI section to the render-target section, and
+  // the import sat between them.  Without it the timeline ended up with zero
+  // events and the player crashed on the first frame.)
+  {
+    CString apxPath(opt.project.c_str());
+    Project.Import(apxPath, (HWND)0);
+    phxvk::LogInfo("project imported: %s", opt.project.c_str());
+  }
 
   // ---------------------------------------------------------------------
   // Create the demo's render targets and point the timeline at them.
@@ -365,6 +565,16 @@ int main(int argc, char **argv)
                      (int)Project.Timeline->Events[i]->Event->StartFrame,
                      (int)Project.Timeline->Events[i]->Event->EndFrame,
                      (int)Project.Timeline->Events[i]->Pass);
+    // Which events are live around frame 6000, where the frame time explodes?
+    phxvk::LogInfo("events active in [5000, 6200):");
+    for (TS32 i = 0; i < Project.Timeline->Events.NumItems(); i++)
+    {
+      const int a = Project.Timeline->Events[i]->Event->StartFrame;
+      const int b = Project.Timeline->Events[i]->Event->EndFrame;
+      if (b > 5000 && a < 6200)
+        phxvk::LogInfo("  event %d: type %d frames [%d, %d)", (int)i,
+                       (int)Project.Timeline->Events[i]->Type, a, b);
+    }
   }
 
   if (rtCollections && rtCollections->RenderTargets.NumItems() > 0)
@@ -553,6 +763,7 @@ int main(int argc, char **argv)
     // Drive on the queue's own length, not on ProcessGeneratorQueue()'s return
     // value: that counts the steps taken (so it is > 0 even on the call that
     // drains the queue), which made this loop spin.
+    const int itemsAtStart = UpdateQueue.NumItems();
     int rounds = 0;
     while (UpdateQueue.NumItems() > 0)
     {
@@ -596,13 +807,16 @@ int main(int argc, char **argv)
     phxvk::LogInfo("end-demo events: %d", ended);
   }
 
+  FrameWatchdog watchdog(opt.frameTimeoutMs, fps);
+
   long long rendered = 0;
   int exitCode = 0;
   int fixedDiagLeft = 3;
   long long lastLoggedFrame = -1;
   while (!phxDone)
   {
-    (void)0;
+    watchdog.Tick((long long)clock.Frame());
+
     if (!window.HandleMessages())
     {
       phxvk::LogInfo("window requested close at frame %lld", (long long)clock.Frame());
@@ -671,7 +885,7 @@ int main(int argc, char **argv)
           }
           else if (e->Type == EVENT_SHADERTOY)
           {
-            ((CphxEvent_Shadertoy_Tool *)e)->UpdateMaterialState();
+            if (!getenv("APEX_NO_SHADERTOY")) ((CphxEvent_Shadertoy_Tool *)e)->UpdateMaterialState();
           }
         }
       }
@@ -720,7 +934,7 @@ int main(int argc, char **argv)
     }
 
     device.ForceStateReset();
-    if (SwapChain) SwapChain->Present(opt.vsync ? 1 : 0, 0);
+    if (SwapChain) SwapChain->Present(winVsync ? 1 : 0, 0);
 
     if (opt.fixedFps) clock.AdvanceFixedStep();
     else clock.Update();

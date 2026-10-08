@@ -1740,19 +1740,20 @@ void CapexRenderTargetCollection::UpdateCollection( TS32 xres, TS32 yres, TBOOL 
   TS32 tay = Project.Timeline->Timeline->AspectY;
 
   // [port] Config::MonitorAspectX/Y came from the unvendored editor header
-  // ../apEx/Config.h.  The editor divided the monitor resolution stored in its
-  // own config by the real screen metrics so that the preview window's
-  // aspect correction matched the configured (possibly non-native) monitor.  A
-  // player has no editor config, so the two factors cancel and `aspect` becomes
-  // the timeline's own aspect - the aspect the demo is authored for.
-  // LOUD: this IS a behaviour change if the editor config used a monitor
-  // resolution that differs from the actual screen; the resulting
-  // aspect-corrected render-target sizes would then differ from the editor's.
-  // Nothing else in the collection depends on it.  See the port report.
+  // ../apEx/Config.h: the resolution of the monitor the user said they were
+  // viewing on.  The editor wrote it from its own settings dialog; the release
+  // player asks the same question in its setup dialog ("Monitor Aspect"), so
+  // the port keeps the answer in src/platform/phx_monitor_aspect.* and reads it
+  // here at runtime instead of hard-coding the screen.  0,0 means "auto", i.e.
+  // the real screen - the value this used to be fixed to, and the one that
+  // makes the correction factor 1 and `aspect` the timeline's authored aspect.
   TS32 sax = GetSystemMetrics( SM_CXSCREEN );
   TS32 say = GetSystemMetrics( SM_CYSCREEN );
   TS32 max = sax;
   TS32 may = say;
+
+  extern void PhxMonitorAspect( TS32 *x, TS32 *y );
+  PhxMonitorAspect( &max, &may );
 
   TF32 aspect = ( tax*max*say ) / (TF32)( tay*may*sax );
 

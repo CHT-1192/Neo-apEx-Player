@@ -61,6 +61,10 @@
 //    by the application's own frame loop.
 #include "window_sdl.h"
 
+// Defined next to PhxWindowSetEventHook() further down; the message pump needs
+// it before then.
+static PhxSdlEventHook s_sdlEventHook = nullptr;
+
 #include <SDL3/SDL.h>
 
 #include <chrono>
@@ -645,6 +649,10 @@ TBOOL CCoreWindowHandlerWin::HandleOSMessages()
   // thread is never parked here and nothing is drawn from the pump.
   while (SDL_PollEvent(&event))
   {
+    // Give the UI first refusal; if it takes the event the engine must not also
+    // act on it (a click on a button should not also reach the demo).
+    if (s_sdlEventHook && s_sdlEventHook(&event)) continue;
+
     switch (event.type)
     {
       ////////////////////////////////////////////////////////////////////////
@@ -1191,6 +1199,8 @@ void CCoreWindowHandlerWin::SetWindowTitle(CString &Title)
 //////////////////////////////////////////////////////////////////////////////
 // handle / keyboard helpers declared in window_sdl.h
 
+
+void PhxWindowSetEventHook(PhxSdlEventHook hook) { s_sdlEventHook = hook; }
 
 TS16 PhxWindowGetKeyState(TS32 virtualKey)
 {

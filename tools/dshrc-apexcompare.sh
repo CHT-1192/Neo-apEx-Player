@@ -44,7 +44,8 @@ apexcompare() {
 
   # --start-frame puts the clock straight at the requested demo frame and
   # --frames 1 renders exactly one present, which the dump matches on.
-  "$player" "$apx" --no-audio --no-vsync --start-frame "$frame" --frames 1 \
+  # --no-ui: the setup dialog is modal and belongs to a human.
+  "$player" "$apx" --no-ui --no-audio --no-vsync --start-frame "$frame" --frames 1 \
       --dump-frame 0="$port" >/dev/null 2>&1
   [ -f "$port" ] || { echo "apexcompare: the player produced no frame" >&2; return 1; }
 

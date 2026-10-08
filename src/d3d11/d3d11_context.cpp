@@ -1034,14 +1034,15 @@ bool ContextImpl::PrepareDraw(VkPipeline *outPipeline, VkPipelineLayout *outLayo
   *outLayout = pipelineLayout;
 
   PipelineKey key;
-  key.vs = stages[kStageVS].shader ? stages[kStageVS].shader->module : VK_NULL_HANDLE;
-  key.ps = stages[kStagePS].shader ? stages[kStagePS].shader->module : VK_NULL_HANDLE;
-  key.hs = stages[kStageHS].shader ? stages[kStageHS].shader->module : VK_NULL_HANDLE;
-  key.ds = stages[kStageDS].shader ? stages[kStageDS].shader->module : VK_NULL_HANDLE;
-  key.layout = inputLayout ? static_cast<InputLayoutImpl *>(inputLayout) : nullptr;
-  key.blend = blendState;
-  key.depthStencil = depthStencilState;
-  key.rasterizer = rasterizerState;
+  // Content hashes, not handles: see PipelineKey.
+  key.vs = stages[kStageVS].shader ? stages[kStageVS].shader->contentHash : 0;
+  key.ps = stages[kStagePS].shader ? stages[kStagePS].shader->contentHash : 0;
+  key.hs = stages[kStageHS].shader ? stages[kStageHS].shader->contentHash : 0;
+  key.ds = stages[kStageDS].shader ? stages[kStageDS].shader->contentHash : 0;
+  key.layout = inputLayout ? static_cast<InputLayoutImpl *>(inputLayout)->contentHash : 0;
+  key.blend = blendState ? static_cast<BlendStateImpl *>(blendState)->contentHash : 0;
+  key.depthStencil = depthStencilState ? static_cast<DepthStencilStateImpl *>(depthStencilState)->contentHash : 0;
+  key.rasterizer = rasterizerState ? static_cast<RasterizerStateImpl *>(rasterizerState)->contentHash : 0;
   key.topology = topology;
   key.sampleMask = sampleMask;
   // rtv[] may contain nulls (the engine binds sparse target lists), and the loop below
@@ -1070,7 +1071,7 @@ bool ContextImpl::PrepareDraw(VkPipeline *outPipeline, VkPipelineLayout *outLayo
     return it->second != VK_NULL_HANDLE;
   }
 
-  if (key.vs == VK_NULL_HANDLE)
+  if (key.vs == 0)
   {
     phxvk::LogError("draw: no vertex shader is bound");
     return false;
@@ -1091,7 +1092,7 @@ bool ContextImpl::PrepareDraw(VkPipeline *outPipeline, VkPipelineLayout *outLayo
   if (stages[kStageGS].shader && phxvk::Vk().features.geometryShader == VK_FALSE && OnceGsUnsupported()())
     phxvk::LogWarn("[d3d11] skipping the geometry shader stage for a pipeline (MoltenVK: geometryShader unsupported)");
   if (phxvk::Vk().features.geometryShader != VK_FALSE) addStage(VK_SHADER_STAGE_GEOMETRY_BIT, kStageGS);
-  if (key.hs != VK_NULL_HANDLE && key.ds != VK_NULL_HANDLE)
+  if (key.hs != 0 && key.ds != 0)
   {
     addStage(VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT, kStageHS);
     addStage(VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT, kStageDS);
@@ -1110,7 +1111,8 @@ bool ContextImpl::PrepareDraw(VkPipeline *outPipeline, VkPipelineLayout *outLayo
   // VUID-VkGraphicsPipelineCreateInfo-Input-07904 error instead.
   std::vector<VkVertexInputBindingDescription> bindingDescs;
   std::vector<VkVertexInputAttributeDescription> attrDescs;
-  InputLayoutImpl *il = key.layout;
+  // The key holds a hash now, so take the object from the parameter.
+  InputLayoutImpl *il = inputLayout ? static_cast<InputLayoutImpl *>(inputLayout) : nullptr;
   const bool haveReflection = il && il->reflectionValid && !il->vertexReflection.inputs.empty();
   auto shaderReadsLocation = [&](UINT location) {
     if (!haveReflection) return true;
@@ -1397,11 +1399,6 @@ void ContextImpl::IASetIndexBuffer(ID3D11Buffer *pIndexBuffer, DXGI_FORMAT Forma
 }
 
 void ContextImpl::IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY Topology) { topology = Topology; }
-void ContextImpl::IAGetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY *pTopology)
-{
-  if (pTopology) *pTopology = topology;
-}
-
 void ContextImpl::VSSetShader(ID3D11VertexShader *pVertexShader, ID3D11ClassInstance *const *, UINT)
 {
   BindShader<ID3D11VertexShader, VertexShaderImpl>(stages[kStageVS].shader, pVertexShader);
@@ -1577,6 +1574,170 @@ void ContextImpl::RSSetState(ID3D11RasterizerState *pRasterizerState)
   BindRef(rasterizerState, pRasterizerState ? static_cast<RasterizerStateImpl *>(pRasterizerState) : nullptr);
 }
 
+// State getters.
+//
+// The engine never reads its own state back, so these existed only as an
+// unimplemented corner of the API until Dear ImGui's DX11 backend needed them:
+// it saves and restores the pipeline state around its own drawing, so a UI can
+// be drawn in the middle of a frame without disturbing the caller.
+// The per-stage getters the same backend needs.  Each returns the object the
+// setter recorded, with the reference D3D11 promises the caller.
+namespace
+{
+inline ID3D11VertexShader *AsVertexShader(ShaderCommon *s)
+{
+  return s ? static_cast<ID3D11VertexShader *>(static_cast<VertexShaderImpl *>(s)) : nullptr;
+}
+inline ID3D11PixelShader *AsPixelShader(ShaderCommon *s)
+{
+  return s ? static_cast<ID3D11PixelShader *>(static_cast<PixelShaderImpl *>(s)) : nullptr;
+}
+inline ID3D11GeometryShader *AsGeometryShader(ShaderCommon *s)
+{
+  return s ? static_cast<ID3D11GeometryShader *>(static_cast<GeometryShaderImpl *>(s)) : nullptr;
+}
+} // namespace
+
+void ContextImpl::IAGetInputLayout(ID3D11InputLayout **ppInputLayout)
+{
+  if (!ppInputLayout) return;
+  *ppInputLayout = inputLayout;
+  if (inputLayout) static_cast<InputLayoutImpl *>(inputLayout)->AddRefImpl();
+}
+
+void ContextImpl::IAGetVertexBuffers(UINT StartSlot, UINT NumBuffers, ID3D11Buffer **ppVertexBuffers, UINT *pStrides, UINT *pOffsets)
+{
+  for (UINT i = 0; i < NumBuffers; i++)
+  {
+    const UINT slot = StartSlot + i;
+    if (slot >= 16) break;
+    if (ppVertexBuffers)
+    {
+      ppVertexBuffers[i] = vertexBuffers[slot];
+      if (vertexBuffers[slot]) static_cast<BufferImpl *>(vertexBuffers[slot])->AddRefImpl();
+    }
+    if (pStrides) pStrides[i] = vertexStrides[slot];
+    if (pOffsets) pOffsets[i] = vertexOffsets[slot];
+  }
+}
+
+void ContextImpl::IAGetIndexBuffer(ID3D11Buffer **pIndexBuffer, DXGI_FORMAT *Format, UINT *Offset)
+{
+  if (pIndexBuffer)
+  {
+    *pIndexBuffer = indexBuffer;
+    if (indexBuffer) static_cast<BufferImpl *>(indexBuffer)->AddRefImpl();
+  }
+  if (Format) *Format = indexFormat;
+  if (Offset) *Offset = indexOffset;
+}
+
+void ContextImpl::IAGetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY *pTopology)
+{
+  if (pTopology) *pTopology = topology;
+}
+
+void ContextImpl::VSGetShader(ID3D11VertexShader **ppVertexShader, ID3D11ClassInstance *const *, UINT *pNumClassInstances)
+{
+  if (pNumClassInstances) *pNumClassInstances = 0;
+  if (!ppVertexShader) return;
+  *ppVertexShader = AsVertexShader(stages[kStageVS].shader);
+  if (*ppVertexShader) static_cast<VertexShaderImpl *>(stages[kStageVS].shader)->AddRefImpl();
+}
+
+void ContextImpl::PSGetShader(ID3D11PixelShader **ppPixelShader, ID3D11ClassInstance *const *, UINT *pNumClassInstances)
+{
+  if (pNumClassInstances) *pNumClassInstances = 0;
+  if (!ppPixelShader) return;
+  *ppPixelShader = AsPixelShader(stages[kStagePS].shader);
+  if (*ppPixelShader) static_cast<PixelShaderImpl *>(stages[kStagePS].shader)->AddRefImpl();
+}
+
+void ContextImpl::GSGetShader(ID3D11GeometryShader **ppGeometryShader, ID3D11ClassInstance *const *, UINT *pNumClassInstances)
+{
+  if (pNumClassInstances) *pNumClassInstances = 0;
+  if (!ppGeometryShader) return;
+  *ppGeometryShader = AsGeometryShader(stages[kStageGS].shader);
+  if (*ppGeometryShader) static_cast<GeometryShaderImpl *>(stages[kStageGS].shader)->AddRefImpl();
+}
+
+void ContextImpl::VSGetConstantBuffers(UINT StartSlot, UINT NumBuffers, ID3D11Buffer **ppConstantBuffers)
+{
+  if (!ppConstantBuffers) return;
+  for (UINT i = 0; i < NumBuffers; i++)
+  {
+    const UINT slot = StartSlot + i;
+    ID3D11Buffer *b = slot < kMaxConstantBuffers ? stages[kStageVS].cb[slot] : nullptr;
+    ppConstantBuffers[i] = b;
+    if (b) static_cast<BufferImpl *>(b)->AddRefImpl();
+  }
+}
+
+void ContextImpl::PSGetShaderResources(UINT StartSlot, UINT NumViews, ID3D11ShaderResourceView **ppShaderResourceViews)
+{
+  if (!ppShaderResourceViews) return;
+  for (UINT i = 0; i < NumViews; i++)
+  {
+    const UINT slot = StartSlot + i;
+    ID3D11ShaderResourceView *v = slot < kMaxShaderResources ? stages[kStagePS].srv[slot] : nullptr;
+    ppShaderResourceViews[i] = v;
+    if (v) static_cast<SRVImpl *>(v)->AddRefImpl();
+  }
+}
+
+void ContextImpl::PSGetSamplers(UINT StartSlot, UINT NumSamplers, ID3D11SamplerState **ppSamplers)
+{
+  if (!ppSamplers) return;
+  for (UINT i = 0; i < NumSamplers; i++)
+  {
+    const UINT slot = StartSlot + i;
+    ID3D11SamplerState *smp = slot < kMaxSamplers ? stages[kStagePS].samplers[slot] : nullptr;
+    ppSamplers[i] = smp;
+    if (smp) static_cast<SamplerStateImpl *>(smp)->AddRefImpl();
+  }
+}
+
+void ContextImpl::RSGetViewports(UINT *pNumViewports, D3D11_VIEWPORT *pViewports)
+{
+  if (pNumViewports) *pNumViewports = viewportSet ? 1 : 0;
+  if (pViewports && viewportSet) pViewports[0] = viewport;
+}
+
+void ContextImpl::RSGetScissorRects(UINT *pNumRects, D3D11_RECT *pRects)
+{
+  if (pNumRects) *pNumRects = scissorSet ? 1 : 0;
+  if (pRects && scissorSet) pRects[0] = scissor;
+}
+
+void ContextImpl::RSGetState(ID3D11RasterizerState **ppRasterizerState)
+{
+  if (!ppRasterizerState) return;
+  *ppRasterizerState = rasterizerState;
+  if (rasterizerState) rasterizerState->AddRefImpl();
+}
+
+void ContextImpl::OMGetBlendState(ID3D11BlendState **ppBlendState, FLOAT BlendFactor[4], UINT *pSampleMask)
+{
+  if (ppBlendState)
+  {
+    *ppBlendState = blendState;
+    if (blendState) blendState->AddRefImpl();
+  }
+  if (BlendFactor)
+    for (int i = 0; i < 4; i++) BlendFactor[i] = blendFactor[i];
+  if (pSampleMask) *pSampleMask = sampleMask;
+}
+
+void ContextImpl::OMGetDepthStencilState(ID3D11DepthStencilState **ppDepthStencilState, UINT *pStencilRef)
+{
+  if (ppDepthStencilState)
+  {
+    *ppDepthStencilState = depthStencilState;
+    if (depthStencilState) depthStencilState->AddRefImpl();
+  }
+  if (pStencilRef) *pStencilRef = stencilRef;
+}
+
 void ContextImpl::RSSetViewports(UINT NumViewports, const D3D11_VIEWPORT *pViewports)
 {
   if (!NumViewports || !pViewports) return;
@@ -1674,7 +1835,18 @@ bool ContextImpl::DrawInternal(bool indexed, UINT count, UINT instanceCount, UIN
 }
 
 void ContextImpl::Draw(UINT VertexCount, UINT StartVertexLocation) { DrawInternal(false, VertexCount, 1, 0, 0, StartVertexLocation, 0); }
-void ContextImpl::DrawIndexed(UINT IndexCount, UINT StartIndexLocation, INT BaseVertexLocation) { DrawInternal(true, IndexCount, 1, StartIndexLocation, BaseVertexLocation, 0, 0); }
+void ContextImpl::DrawIndexed(UINT IndexCount, UINT StartIndexLocation, INT BaseVertexLocation)
+{
+#ifdef APEX_TRACE_UI_DRAWS
+  {
+    static int n = 0;
+    if (++n <= 12 || (n % 200) == 0)
+      phxvk::LogInfo("[trace] DrawIndexed #%d: %u indices, vs=%p ps=%p", n, IndexCount,
+                     (void *)stages[kStageVS].shader, (void *)stages[kStagePS].shader);
+  }
+#endif
+  DrawInternal(true, IndexCount, 1, StartIndexLocation, BaseVertexLocation, 0, 0);
+}
 void ContextImpl::DrawInstanced(UINT VertexCountPerInstance, UINT InstanceCount, UINT StartVertexLocation, UINT StartInstanceLocation)
 {
   DrawInternal(false, VertexCountPerInstance, InstanceCount, 0, 0, StartVertexLocation, StartInstanceLocation);

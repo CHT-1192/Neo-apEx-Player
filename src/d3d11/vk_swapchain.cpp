@@ -13,6 +13,10 @@
 namespace phxd3d11
 {
 
+// The shim has exactly one swap chain in practice, and the acquire-wait hook is
+// a plain function pointer, so it needs a single well-known target.
+static Swapchain *s_activeSwapchain = nullptr;
+
 namespace
 {
 bool g_loggedFullscreen = false;
@@ -57,21 +61,49 @@ bool Swapchain::CreateSurface(HWND outputWindow)
 bool Swapchain::Create(HWND outputWindow, const DXGI_SWAP_CHAIN_DESC &desc, uint32_t width, uint32_t height)
 {
   m_desc = desc;
+  s_activeSwapchain = this;
   if (!CreateSurface(outputWindow)) return false;
 
   VkSemaphoreCreateInfo sci{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
   if (m_acquireSemaphore == VK_NULL_HANDLE)
     PHXVK_CHECK(vkCreateSemaphore(phxvk::Vk().device, &sci, nullptr, &m_acquireSemaphore));
-  if (m_renderFinishedSemaphore == VK_NULL_HANDLE)
-    PHXVK_CHECK(vkCreateSemaphore(phxvk::Vk().device, &sci, nullptr, &m_renderFinishedSemaphore));
-
   if (!CreateSwapchain(width, height, desc.BufferDesc.Format)) return false;
+
+  // One render-finished semaphore per image, created once the image count is
+  // known.  Reusing a single one across frames is what the validation layers
+  // complained about.
+  if (m_renderFinishedSemaphores.empty())
+  {
+    m_renderFinishedSemaphores.resize(m_images.size(), VK_NULL_HANDLE);
+    for (VkSemaphore &sem : m_renderFinishedSemaphores)
+      PHXVK_CHECK(vkCreateSemaphore(phxvk::Vk().device, &sci, nullptr, &sem));
+  }
+
+  // The acquire wait has to reach whichever submission happens first in a frame,
+  // and that is not necessarily the present's - see vkSetAcquireWaitHook().
+  phxvk::vkSetAcquireWaitHook([]() -> VkSemaphore { return s_activeSwapchain ? s_activeSwapchain->TakeAcquireWait() : VK_NULL_HANDLE; });
+
   return AcquireNextImage();
 }
 
 bool Swapchain::CreateSwapchain(uint32_t width, uint32_t height, DXGI_FORMAT format)
 {
   phxvk::Device &d = phxvk::Vk();
+
+  // Nothing may still be using the images we are about to destroy.
+  //
+  // This is the one place a swap chain is rebuilt, and it is reached from the
+  // acquire and present paths - i.e. in the middle of a frame that has just been
+  // submitted and whose command buffer still references these images (a layout
+  // transition to PRESENT_SRC, for one).  Without the wait, destroying them
+  // leaves the GPU holding freed MVKImages, and the next barrier over one of
+  // them crashed inside MVKImage::applyImageMemoryBarrier.  Waiting here is what
+  // Recreate() already did before calling this.
+  vkDeviceWaitIdle(d.device);
+
+  // The old images and semaphores are about to go away, so no wait can still be
+  // outstanding against them.
+  m_submitWaitsOnAcquire = false;
 
   VkSurfaceCapabilitiesKHR caps{};
   PHXVK_CHECK(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(d.physical, m_surface, &caps));
@@ -264,6 +296,9 @@ void Swapchain::DestroySwapchainObjects()
 
 void Swapchain::Destroy()
 {
+  // The acquire-wait hook reaches this object through a static pointer; leaving
+  // it set after destruction hands a freed object to the next submission.
+  if (s_activeSwapchain == this) s_activeSwapchain = nullptr;
   phxvk::Device &d = phxvk::Vk();
   if (!d.device)
   {
@@ -281,11 +316,9 @@ void Swapchain::Destroy()
     vkDestroySemaphore(d.device, m_acquireSemaphore, nullptr);
     m_acquireSemaphore = VK_NULL_HANDLE;
   }
-  if (m_renderFinishedSemaphore)
-  {
-    vkDestroySemaphore(d.device, m_renderFinishedSemaphore, nullptr);
-    m_renderFinishedSemaphore = VK_NULL_HANDLE;
-  }
+  for (VkSemaphore &sem : m_renderFinishedSemaphores)
+    if (sem != VK_NULL_HANDLE) vkDestroySemaphore(d.device, sem, nullptr);
+  m_renderFinishedSemaphores.clear();
   if (m_surface)
   {
     vkDestroySurfaceKHR(d.instance, m_surface, nullptr);
@@ -310,12 +343,22 @@ bool Swapchain::AcquireNextImage()
   phxvk::Device &d = phxvk::Vk();
   uint32_t index = 0;
   VkResult res = vkAcquireNextImageKHR(d.device, m_swapchain, UINT64_MAX, m_acquireSemaphore, VK_NULL_HANDLE, &index);
-  if (res == VK_ERROR_OUT_OF_DATE_KHR || res == VK_SUBOPTIMAL_KHR)
+
+  // VK_SUBOPTIMAL_KHR still hands back a usable image AND leaves the semaphore
+  // signalled, so it must be accepted, not retried: acquiring again with the
+  // same semaphore is exactly what the validation layers flag as "Semaphore must
+  // not have any pending operations".  Only OUT_OF_DATE means no image.
+  if (res == VK_SUBOPTIMAL_KHR)
+  {
+    m_suboptimal = true;
+  }
+  else if (res == VK_ERROR_OUT_OF_DATE_KHR)
   {
     phxvk::LogWarn("swap chain out of date on acquire; recreating");
     if (!CreateSwapchain(m_width, m_height, m_desc.BufferDesc.Format)) return false;
     res = vkAcquireNextImageKHR(d.device, m_swapchain, UINT64_MAX, m_acquireSemaphore, VK_NULL_HANDLE, &index);
   }
+
   if (res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR)
   {
     phxvk::LogError("vkAcquireNextImageKHR failed: %s", phxvk::VkResultName(res));
@@ -331,13 +374,29 @@ VkResult Swapchain::Present()
   if (m_swapchain == VK_NULL_HANDLE) return VK_ERROR_SURFACE_LOST_KHR;
   phxvk::Device &d = phxvk::Vk();
   VkPresentInfoKHR pi{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
+  // The semaphore belonging to THIS image: the one the last submission before
+  // this present signalled.
+  VkSemaphore renderFinished = RenderFinishedSemaphore();
+  if (renderFinished == VK_NULL_HANDLE)
+  {
+    phxvk::LogError("swap chain present without a render-finished semaphore");
+    return VK_ERROR_UNKNOWN;
+  }
   pi.waitSemaphoreCount = 1;
-  pi.pWaitSemaphores = &m_renderFinishedSemaphore;
+  pi.pWaitSemaphores = &renderFinished;
   pi.swapchainCount = 1;
   pi.pSwapchains = &m_swapchain;
   pi.pImageIndices = &m_current;
   VkResult res = vkQueuePresentKHR(d.queue, &pi);
-  if (res == VK_ERROR_OUT_OF_DATE_KHR || res == VK_SUBOPTIMAL_KHR)
+  // Same distinction as on acquire: a SUBOPTIMAL present has still happened, and
+  // recreating the swap chain here would destroy semaphores the present may
+  // still be waiting on.  Note it and let the next acquire rebuild instead.
+  if (res == VK_SUBOPTIMAL_KHR)
+  {
+    m_suboptimal = true;
+    return VK_SUCCESS;
+  }
+  if (res == VK_ERROR_OUT_OF_DATE_KHR)
   {
     phxvk::LogWarn("swap chain out of date on present; recreating");
     if (CreateSwapchain(m_width, m_height, m_desc.BufferDesc.Format)) res = VK_SUCCESS;

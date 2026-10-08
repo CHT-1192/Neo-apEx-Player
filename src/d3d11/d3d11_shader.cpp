@@ -66,6 +66,14 @@ bool BuildShaderCommon(const void *bytecode, SIZE_T length, phxvk::ShaderStage s
   out->stage = stage;
   out->spirv.assign(words, words + length / sizeof(uint32_t));
   out->entryPoint = SpirvEntryPointName(words, out->spirv.size());
+  // Identity for the pipeline cache: identical bytecode must map to one
+  // pipeline even though the engine keeps minting new shader objects.
+  {
+    uint64_t h = PhxHashBytes(out->spirv.data(), out->spirv.size() * sizeof(uint32_t));
+    h = PhxHashCombine(h, (uint64_t)stage);
+    h = PhxHashCombine(h, PhxHashBytes(out->entryPoint.data(), out->entryPoint.size()));
+    out->contentHash = h ? h : 1; // 0 is reserved for "no shader"
+  }
 
   ShaderReflectionRecord rec;
   if (LookupShaderReflection(bytecode, (size_t)length, &rec))
@@ -220,6 +228,23 @@ HRESULT DeviceImpl::CreateInputLayout(const D3D11_INPUT_ELEMENT_DESC *pInputElem
   {
     layout->names.push_back(pInputElementDescs[i].SemanticName ? pInputElementDescs[i].SemanticName : "");
     layout->elements[i].SemanticName = layout->names.back().c_str();
+  }
+
+  // Identity for the pipeline cache (see PipelineKey): element fields plus the
+  // semantic names, which live outside the element struct.
+  {
+    uint64_t h = 0x4004;
+    for (UINT i = 0; i < NumElements; i++)
+    {
+      h = PhxHashCombine(h, (uint64_t)layout->elements[i].SemanticIndex);
+      h = PhxHashCombine(h, (uint64_t)layout->elements[i].Format);
+      h = PhxHashCombine(h, (uint64_t)layout->elements[i].InputSlot);
+      h = PhxHashCombine(h, (uint64_t)layout->elements[i].AlignedByteOffset);
+      h = PhxHashCombine(h, (uint64_t)layout->elements[i].InputSlotClass);
+      h = PhxHashCombine(h, (uint64_t)layout->elements[i].InstanceDataStepRate);
+      h = PhxHashCombine(h, PhxHashBytes(layout->names[i].data(), layout->names[i].size()));
+    }
+    layout->contentHash = h ? h : 1;
   }
 
   // The reflection of the vertex shader tells us which locations the SPIR-V

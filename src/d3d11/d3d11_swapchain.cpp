@@ -53,22 +53,40 @@ void SwapChainImpl::Shutdown()
 
 bool SwapChainImpl::CreateBackBufferObjects()
 {
-  auto *tex = new Texture2DImpl();
-  tex->device = m_device;
-  tex->tex.swapchain = &m_chain;
+  // The back buffer wrapper is REUSED across a resize, not rebuilt.
+  //
+  // Its VkImage is resolved from whatever image the swap chain currently holds
+  // on every use (TextureImpl::vkImage / vkSwapchainView), so there is nothing
+  // in it that belongs to one generation of swap chain images.  Rebuilding it
+  // instead destroys a texture that views elsewhere still point at - the
+  // player's global phxBackBufferView is one, created from GetBuffer(0) and
+  // never released - and D3D11 says a view keeps its resource alive.  That ran
+  // as a use-after-free on the first frame after a resize: the dangling
+  // TextureImpl read as "no VkImage", the win32_* path skipped the layout
+  // transition, and the next dynamic rendering instance passed a null image
+  // view to vkCmdBeginRendering and segfaulted.
+  auto *tex = static_cast<Texture2DImpl *>(m_backBuffer);
+  if (!tex)
+  {
+    tex = new Texture2DImpl();
+    tex->device = m_device;
+    tex->tex.swapchain = &m_chain;
+    tex->tex.depth = 1;
+    tex->tex.arraySize = 1;
+    tex->tex.mipLevels = 1;
+    tex->tex.sampleCount = 1;
+    tex->tex.usage = D3D11_USAGE_DEFAULT;
+    tex->tex.bindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+    tex->tex.miscFlags = 0;
+    TrackObjectCreated("ID3D11Texture2D(backbuffer)", tex);
+    m_backBuffer = tex;
+  }
+  // Only the cached description has to follow the new images.
   tex->tex.width = m_chain.Width();
   tex->tex.height = m_chain.Height();
-  tex->tex.depth = 1;
-  tex->tex.arraySize = 1;
-  tex->tex.mipLevels = 1;
   tex->tex.format = m_chain.Format();
-  tex->tex.sampleCount = 1;
-  tex->tex.usage = D3D11_USAGE_DEFAULT;
-  tex->tex.bindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
-  tex->tex.miscFlags = 0;
-  TrackObjectCreated("ID3D11Texture2D(backbuffer)", tex);
-  m_backBuffer = tex;
 
+  DestroyBackBufferRTV();
   ID3D11RenderTargetView *rtv = nullptr;
   HRESULT hr = m_device->CreateRenderTargetView(m_backBuffer, nullptr, &rtv);
   if (FAILED(hr) || !rtv)
@@ -81,15 +99,25 @@ bool SwapChainImpl::CreateBackBufferObjects()
   return true;
 }
 
-void SwapChainImpl::DestroyBackBufferObjects()
+void SwapChainImpl::DestroyBackBufferRTV()
 {
   if (m_backBufferRTV)
   {
     m_backBufferRTV->Release();
     m_backBufferRTV = nullptr;
   }
+}
+
+void SwapChainImpl::DestroyBackBufferObjects()
+{
+  DestroyBackBufferRTV();
   if (m_backBuffer)
   {
+    // The chain itself is going away, so `tex.swapchain` - which addresses a
+    // member of *this - must be cleared before the texture can outlive it; a
+    // later draw writing its layout through a dangling pointer faulted inside
+    // Swapchain::SetLayoutAt.
+    static_cast<Texture2DImpl *>(m_backBuffer)->tex.swapchain = nullptr;
     m_backBuffer->Release();
     m_backBuffer = nullptr;
   }
@@ -255,8 +283,10 @@ HRESULT SwapChainImpl::ResizeBuffers(UINT BufferCount, UINT Width, UINT Height, 
     phxvk::FrameWaitIdle();
   }
 
-  // Drop every view/back buffer object that references the old images first.
-  DestroyBackBufferObjects();
+  // Drop the swap chain's own back-buffer view: it was made from the images
+  // that are about to go.  The back buffer texture itself survives, and so do
+  // the views others hold of it (see CreateBackBufferObjects).
+  DestroyBackBufferRTV();
   if (!m_chain.Recreate(Width, Height, NewFormat))
   {
     phxvk::LogError("swap chain: ResizeBuffers failed");

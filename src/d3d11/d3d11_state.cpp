@@ -203,6 +203,73 @@ HRESULT DeviceImpl::CreateSamplerState(const D3D11_SAMPLER_DESC *pSamplerDesc, I
   return S_OK;
 }
 
+namespace
+{
+
+// The pipeline cache keys on these, so they must be stable across rebuilds.  A
+// whole-struct hash would not be: the caller's DESC can carry uninitialised
+// padding bytes, which would give the same state object a different hash every
+// time it is rebuilt - exactly the case that used to leak a pipeline per frame.
+// Hashing the members individually avoids the question entirely.
+
+uint64_t HashBlendDesc(const D3D11_BLEND_DESC &d)
+{
+  uint64_t h = 0x1001;
+  h = PhxHashCombine(h, (uint64_t)d.AlphaToCoverageEnable);
+  h = PhxHashCombine(h, (uint64_t)d.IndependentBlendEnable);
+  for (int i = 0; i < 8; i++)
+  {
+    const D3D11_RENDER_TARGET_BLEND_DESC &r = d.RenderTarget[i];
+    h = PhxHashCombine(h, (uint64_t)r.BlendEnable);
+    h = PhxHashCombine(h, (uint64_t)r.SrcBlend);
+    h = PhxHashCombine(h, (uint64_t)r.DestBlend);
+    h = PhxHashCombine(h, (uint64_t)r.BlendOp);
+    h = PhxHashCombine(h, (uint64_t)r.SrcBlendAlpha);
+    h = PhxHashCombine(h, (uint64_t)r.DestBlendAlpha);
+    h = PhxHashCombine(h, (uint64_t)r.BlendOpAlpha);
+    h = PhxHashCombine(h, (uint64_t)r.RenderTargetWriteMask);
+  }
+  return h;
+}
+
+uint64_t HashDepthStencilDesc(const D3D11_DEPTH_STENCIL_DESC &d)
+{
+  uint64_t h = 0x2002;
+  h = PhxHashCombine(h, (uint64_t)d.DepthEnable);
+  h = PhxHashCombine(h, (uint64_t)d.DepthWriteMask);
+  h = PhxHashCombine(h, (uint64_t)d.DepthFunc);
+  h = PhxHashCombine(h, (uint64_t)d.StencilEnable);
+  h = PhxHashCombine(h, (uint64_t)d.StencilReadMask);
+  h = PhxHashCombine(h, (uint64_t)d.StencilWriteMask);
+  h = PhxHashCombine(h, (uint64_t)d.FrontFace.StencilFailOp);
+  h = PhxHashCombine(h, (uint64_t)d.FrontFace.StencilDepthFailOp);
+  h = PhxHashCombine(h, (uint64_t)d.FrontFace.StencilPassOp);
+  h = PhxHashCombine(h, (uint64_t)d.FrontFace.StencilFunc);
+  h = PhxHashCombine(h, (uint64_t)d.BackFace.StencilFailOp);
+  h = PhxHashCombine(h, (uint64_t)d.BackFace.StencilDepthFailOp);
+  h = PhxHashCombine(h, (uint64_t)d.BackFace.StencilPassOp);
+  h = PhxHashCombine(h, (uint64_t)d.BackFace.StencilFunc);
+  return h;
+}
+
+uint64_t HashRasterizerDesc(const D3D11_RASTERIZER_DESC &d)
+{
+  uint64_t h = 0x3003;
+  h = PhxHashCombine(h, (uint64_t)d.FillMode);
+  h = PhxHashCombine(h, (uint64_t)d.CullMode);
+  h = PhxHashCombine(h, (uint64_t)(int32_t)d.FrontCounterClockwise);
+  h = PhxHashCombine(h, (uint64_t)(int32_t)d.DepthBias);
+  h = PhxHashCombine(h, (uint64_t)(uint32_t)(int32_t)(d.DepthBiasClamp * 1000.0f));
+  h = PhxHashCombine(h, (uint64_t)(uint32_t)(int32_t)(d.SlopeScaledDepthBias * 1000.0f));
+  h = PhxHashCombine(h, (uint64_t)d.DepthClipEnable);
+  h = PhxHashCombine(h, (uint64_t)d.ScissorEnable);
+  h = PhxHashCombine(h, (uint64_t)d.MultisampleEnable);
+  h = PhxHashCombine(h, (uint64_t)d.AntialiasedLineEnable);
+  return h;
+}
+
+} // namespace
+
 HRESULT DeviceImpl::CreateBlendState(const D3D11_BLEND_DESC *pBlendStateDesc, ID3D11BlendState **ppBlendState)
 {
   if (!ppBlendState) return E_POINTER;
@@ -211,6 +278,9 @@ HRESULT DeviceImpl::CreateBlendState(const D3D11_BLEND_DESC *pBlendStateDesc, ID
   auto *s = new BlendStateImpl();
   s->device = this;
   s->desc = *pBlendStateDesc;
+  // Hashing the DESC (plain data, no pointers) lets a rebuilt-but-identical
+  // state object reuse the existing pipeline instead of adding another one.
+  s->contentHash = HashBlendDesc(s->desc) ? HashBlendDesc(s->desc) : 1;
   TrackObjectCreated("ID3D11BlendState", s);
   *ppBlendState = s;
   return S_OK;
@@ -224,6 +294,9 @@ HRESULT DeviceImpl::CreateDepthStencilState(const D3D11_DEPTH_STENCIL_DESC *pDep
   auto *s = new DepthStencilStateImpl();
   s->device = this;
   s->desc = *pDepthStencilDesc;
+  // Hashing the DESC (plain data, no pointers) lets a rebuilt-but-identical
+  // state object reuse the existing pipeline instead of adding another one.
+  s->contentHash = HashDepthStencilDesc(s->desc) ? HashDepthStencilDesc(s->desc) : 1;
   TrackObjectCreated("ID3D11DepthStencilState", s);
   *ppDepthStencilState = s;
   return S_OK;
@@ -237,6 +310,9 @@ HRESULT DeviceImpl::CreateRasterizerState(const D3D11_RASTERIZER_DESC *pRasteriz
   auto *s = new RasterizerStateImpl();
   s->device = this;
   s->desc = *pRasterizerDesc;
+  // Hashing the DESC (plain data, no pointers) lets a rebuilt-but-identical
+  // state object reuse the existing pipeline instead of adding another one.
+  s->contentHash = HashRasterizerDesc(s->desc) ? HashRasterizerDesc(s->desc) : 1;
   TrackObjectCreated("ID3D11RasterizerState", s);
   *ppRasterizerState = s;
   return S_OK;

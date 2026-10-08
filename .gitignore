@@ -13,6 +13,11 @@ work/
 *.ppm
 *.dSYM/
 
+# Python bytecode.  A .pyc embeds the absolute path it was compiled from,
+# which is machine-specific and does not belong in the repository.
+__pycache__/
+*.pyc
+
 # macOS
 .DS_Store
 

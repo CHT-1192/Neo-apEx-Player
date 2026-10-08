@@ -287,7 +287,10 @@ struct ViewImpl
   {                                                                                         \
     ViewImpl v;                                                                             \
     DescType desc{};                                                                        \
-    DeviceImpl *device = nullptr;                                                           \
+    DeviceImpl *device = nullptr;                                                            \
+    /* Identity for the pipeline cache; the DESC is plain data, so hashing it makes  */      \
+    /* two equivalent state objects share one pipeline instead of leaking one each. */      \
+    uint64_t contentHash = 0;                                                               \
     ~Class() override;                                                                      \
     void STDMETHODCALLTYPE GetDevice(ID3D11Device **ppDevice) override;                      \
     HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID, UINT *, void *) override;              \
@@ -310,10 +313,35 @@ PHX_VIEW_OBJECT(UAVImpl, ID3D11UnorderedAccessView, D3D11_UNORDERED_ACCESS_VIEW_
 // shaders / input layout
 // ===========================================================================
 
+// FNV-1a over raw bytes.  Used to give shaders and state objects a stable
+// identity for the pipeline cache: see PipelineKey.
+inline uint64_t PhxHashBytes(const void *data, size_t n, uint64_t seed = 1469598103934665603ull)
+{
+  const unsigned char *p = (const unsigned char *)data;
+  uint64_t h = seed;
+  for (size_t i = 0; i < n; i++)
+  {
+    h ^= p[i];
+    h *= 1099511628211ull;
+  }
+  return h;
+}
+inline uint64_t PhxHashCombine(uint64_t h, uint64_t v)
+{
+  h ^= v + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
+  return h;
+}
+
 struct ShaderCommon
 {
   phxvk::ShaderStage stage = phxvk::ShaderStage::Vertex;
   VkShaderModule module = VK_NULL_HANDLE;
+  // Hash of the SPIR-V.  The pipeline cache keys on this rather than on
+  // `module`, because the engine recreates shaders with identical bytecode (a
+  // shadertoy material is rebuilt every frame) and each rebuild used to mint a
+  // brand new VkShaderModule - and therefore a brand new pipeline that was never
+  // released.  See PipelineKey.
+  uint64_t contentHash = 0;
   phxvk::Reflection reflection;
   std::vector<uint32_t> spirv;
   std::string debugName;
@@ -352,6 +380,7 @@ struct InputLayoutImpl : public ID3D11InputLayout, public ObjectBase
   std::vector<std::string> names; // backs elements[].SemanticName
   phxvk::Reflection vertexReflection;
   bool reflectionValid = false;
+  uint64_t contentHash = 0;
 
   ~InputLayoutImpl() override;
   void STDMETHODCALLTYPE GetDevice(ID3D11Device **ppDevice) override;
@@ -371,7 +400,10 @@ struct InputLayoutImpl : public ID3D11InputLayout, public ObjectBase
   struct Class : public Iface, public ObjectBase                                            \
   {                                                                                         \
     DescType desc{};                                                                        \
-    DeviceImpl *device = nullptr;                                                           \
+    DeviceImpl *device = nullptr;                                                            \
+    /* Identity for the pipeline cache; the DESC is plain data, so hashing it makes  */      \
+    /* two equivalent state objects share one pipeline instead of leaking one each. */      \
+    uint64_t contentHash = 0;                                                               \
     ~Class() override;                                                                      \
     void STDMETHODCALLTYPE GetDevice(ID3D11Device **ppDevice) override;                      \
     HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID, UINT *, void *) override;              \
@@ -484,6 +516,12 @@ public:
 
 private:
   bool CreateBackBufferObjects();
+  // Releases the swap chain's own back-buffer render target view.  It is only
+  // valid while the images it was made from are, so a resize drops it - but the
+  // Texture2DImpl behind it is kept, see d3d11_swapchain.cpp.
+  void DestroyBackBufferRTV();
+  // Shutdown only: the swap chain is going away, so the back-buffer wrapper can
+  // go with it.
   void DestroyBackBufferObjects();
 
   DeviceImpl *m_device = nullptr;
@@ -575,13 +613,19 @@ struct MergedBinding
   VkShaderStageFlags stages = 0;
 };
 
+// Keyed on CONTENT, not identity.
+//
+// These used to be raw pointers (and VkShaderModule handles).  The engine throws
+// its state objects and shaders away and rebuilds them - per frame, for a
+// shadertoy material - so every frame produced a key that had never been seen,
+// the pipeline map only ever grew, and each entry is a compiled Metal pipeline.
+// By the time the demo reached frame 6000 that was ~28 seconds per frame with
+// the machine swapping; hashing the content makes a rebuild a cache hit.
 struct PipelineKey
 {
-  VkShaderModule vs = VK_NULL_HANDLE, ps = VK_NULL_HANDLE, hs = VK_NULL_HANDLE, ds = VK_NULL_HANDLE;
-  InputLayoutImpl *layout = nullptr;
-  BlendStateImpl *blend = nullptr;
-  DepthStencilStateImpl *depthStencil = nullptr;
-  RasterizerStateImpl *rasterizer = nullptr;
+  uint64_t vs = 0, ps = 0, hs = 0, ds = 0;      // SPIR-V content hashes
+  uint64_t layout = 0;                           // input layout content hash
+  uint64_t blend = 0, depthStencil = 0, rasterizer = 0;
   D3D11_PRIMITIVE_TOPOLOGY topology = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
   VkFormat color[8] = {};
   UINT colorCount = 0;
@@ -680,6 +724,23 @@ struct ContextImpl : public ID3D11DeviceContext, public ObjectBase
   void STDMETHODCALLTYPE IASetIndexBuffer(ID3D11Buffer *pIndexBuffer, DXGI_FORMAT Format, UINT Offset) override;
   void STDMETHODCALLTYPE IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY Topology) override;
   void STDMETHODCALLTYPE IAGetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY *pTopology) override;
+  // State getters.  D3D11 requires these; the engine never reads its own state
+  // back, so they were an unimplemented corner until Dear ImGui's DX11 backend
+  // needed them to save and restore the pipeline around its own drawing.
+  void STDMETHODCALLTYPE IAGetInputLayout(ID3D11InputLayout **ppInputLayout) override;
+  void STDMETHODCALLTYPE IAGetVertexBuffers(UINT StartSlot, UINT NumBuffers, ID3D11Buffer **ppVertexBuffers, UINT *pStrides, UINT *pOffsets) override;
+  void STDMETHODCALLTYPE IAGetIndexBuffer(ID3D11Buffer **pIndexBuffer, DXGI_FORMAT *Format, UINT *Offset) override;
+  void STDMETHODCALLTYPE VSGetShader(ID3D11VertexShader **ppVertexShader, ID3D11ClassInstance *const *ppClassInstances, UINT *pNumClassInstances) override;
+  void STDMETHODCALLTYPE PSGetShader(ID3D11PixelShader **ppPixelShader, ID3D11ClassInstance *const *ppClassInstances, UINT *pNumClassInstances) override;
+  void STDMETHODCALLTYPE GSGetShader(ID3D11GeometryShader **ppGeometryShader, ID3D11ClassInstance *const *ppClassInstances, UINT *pNumClassInstances) override;
+  void STDMETHODCALLTYPE VSGetConstantBuffers(UINT StartSlot, UINT NumBuffers, ID3D11Buffer **ppConstantBuffers) override;
+  void STDMETHODCALLTYPE PSGetShaderResources(UINT StartSlot, UINT NumViews, ID3D11ShaderResourceView **ppShaderResourceViews) override;
+  void STDMETHODCALLTYPE PSGetSamplers(UINT StartSlot, UINT NumSamplers, ID3D11SamplerState **ppSamplers) override;
+  void STDMETHODCALLTYPE RSGetViewports(UINT *pNumViewports, D3D11_VIEWPORT *pViewports) override;
+  void STDMETHODCALLTYPE RSGetScissorRects(UINT *pNumRects, D3D11_RECT *pRects) override;
+  void STDMETHODCALLTYPE RSGetState(ID3D11RasterizerState **ppRasterizerState) override;
+  void STDMETHODCALLTYPE OMGetBlendState(ID3D11BlendState **ppBlendState, FLOAT BlendFactor[4], UINT *pSampleMask) override;
+  void STDMETHODCALLTYPE OMGetDepthStencilState(ID3D11DepthStencilState **ppDepthStencilState, UINT *pStencilRef) override;
 
   void STDMETHODCALLTYPE VSSetShader(ID3D11VertexShader *pVertexShader, ID3D11ClassInstance *const *ppClassInstances, UINT NumClassInstances) override;
   void STDMETHODCALLTYPE VSSetConstantBuffers(UINT StartSlot, UINT NumBuffers, ID3D11Buffer *const *ppConstantBuffers) override;

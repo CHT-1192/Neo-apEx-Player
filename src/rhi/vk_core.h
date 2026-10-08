@@ -101,6 +101,24 @@ VkCommandBuffer FrameCommandBuffer();
 void FrameBegin();
 void FrameEndAndSubmit();
 void FrameWaitIdle();
+
+// A swap chain must be waited on before anything touches the image it just
+// acquired.  This lets the presentation layer hand that semaphore to whichever
+// submission happens FIRST in a frame, without src/rhi having to know what a
+// swap chain is.
+//
+// Why it matters here: the engine submits the frame command buffer more than
+// once - PresentFrame() does, but so do SubmitAndWait() (readbacks) and
+// ClearState() in the middle of a frame.  Those mid-frame submits carry the
+// draws that target the back buffer, so if they do not wait on the acquire
+// semaphore the GPU starts writing an image the presentation engine has not
+// released yet.  On screen that is an intermittent black (or stale) frame.
+//
+// The hook returns the semaphore the next submission must wait on, or
+// VK_NULL_HANDLE, and is expected to consume it: a binary semaphore may only be
+// waited on once.
+using AcquireWaitHook = VkSemaphore (*)();
+void vkSetAcquireWaitHook(AcquireWaitHook hook);
 void DeferFree(VkBuffer buffer, VkDeviceMemory memory);
 // Same idea for images: never vkDestroyImage while the current frame's command
 // buffer can still reference the image (directly or through a view/descriptor).

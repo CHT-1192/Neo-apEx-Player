@@ -127,8 +127,12 @@ cmake -S . -B build && cmake --build build -j8
 
 ```
 --song FILE          .mvm to take the timeline from (default: the project's <songfile>)
---width N --height N window size
---fullscreen
+--width N --height N pre-select this mode in the setup dialog's Resolution list;
+                     without the dialog, the window size
+--fullscreen         --no-ui only: start fullscreen
+--windowed           pre-select the setup dialog's Fullscreen box off
+--ui / --no-ui       show / skip the setup dialog (shown by default, as in the
+                     release player; --no-ui is what scripts pass)
 --frames N           render N presents and exit (with the default real-time clock
                      the demo still advances in real time and skips frames)
 --start-frame N
@@ -138,6 +142,10 @@ cmake -S . -B build && cmake --build build -j8
                      time.  Omit it to watch the demo at its original speed.
 --fps N              override the project framerate
 --no-vsync
+--music FILE         play a pre-rendered track (WAV, or the Windows tool's
+                     .apxsndcache) and take the clock from its play cursor
+--no-audio           never open an audio device
+--frame-timeout MS   abort if one frame exceeds MS (default 5000; 0 disables)
 --validate           enable Vulkan validation layers
 --dump-frame N=FILE  write frame N to FILE as binary PPM (repeatable)
 ```
@@ -162,9 +170,34 @@ mv cleanslate.apxsndcache demo/step010padding.apxsndcache
 
 It plays the demo end to end — 284 s, 34132 frames at 120 fps — with the original
 music, and exits at the end. **ESC** quits early, and so does closing the window;
-those are the only controls, because they are the only controls the Win32 release
-player had (`apEx/MinimalPlayer/WindowHandler.cpp`). There is no pause or seek in
-the original, so there is none here.
+those are the only controls once it is running, because they are the only controls
+the Win32 release player had (`apEx/MinimalPlayer/WindowHandler.cpp`). There is no
+pause or seek in the original, so there is none here.
+
+### The setup dialog
+
+`./build/neo_apex_player demo/cleanslate.apx` opens the release player's setup
+dialog first, in its own window: **Resolution**, **Monitor Aspect**,
+**Fullscreen**, **V-sync**, **GO!**, **Quit**, with the release and the group in
+the frame above. This is not an addition — it is what the release player does
+before it creates anything at all (`MinimalPlayer.cpp:147`,
+`SetupDialog.cpp:195`), and the port keeps the same order and the same defaults
+(Fullscreen and V-sync ticked, Resolution on the display's current mode, Monitor
+Aspect on `(auto)`). **Enter** accepts, **Esc** cancels; the window has no
+caption, so it is dragged by its client area, as the original's was.
+
+It is SDL3 + Dear ImGui on its own `SDL_Renderer`: no Vulkan, no swap chain, no
+device. It is torn down before the engine's window exists, which is what the
+original's modal `DialogBox` amounts to. `--no-ui` skips it and takes the
+settings from the command line instead, which is what the scripts in `ci/` and
+`tools/` and the `apexcompare` helper pass.
+
+Two of its answers reach the engine rather than just the window: the resolution
+and the fullscreen flag go into `CCoreWindowParameters`, and **Monitor Aspect**
+is the value `CapexRenderTargetCollection::UpdateCollection()` uses to letterbox
+the demo's authored aspect into the window (see
+`src/platform/phx_monitor_aspect.h`). `(auto)` — the default — means "whatever
+display this is", which is what the port hard-coded before.
 
 The cache is found automatically because it sits next to the song the project
 names. `--music FILE` overrides it, and dropping `--music` and the cache gives the

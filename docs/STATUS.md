@@ -57,6 +57,75 @@ behind both APIs.
 * Mesh text generation uses Windows GDI glyph outlines + the GLU tessellator;
   macOS provides GLU via the OpenGL framework (verified to build and run).
 
+## MILESTONE 5: the release setup dialog, and the resize crash
+
+### The dialog
+
+`src/player/ui.{h,cpp}`. The release player shows this before anything exists:
+
+```
+MinimalPlayer.cpp:147   if ( OpenSetupDialog( Strings ) )
+MinimalPlayer.cpp:257   InitWindow( hInstance, setupcfg.mode.dmPelsWidth, ..., setupcfg.fullscreen )
+SetupDialog.cpp:195     DialogBox( 0, MAKEINTRESOURCE( IDD_SETUP ), 0, DlgFunc )
+```
+
+so it is a parentless, borderless, screen-centred popup that owns the whole event
+loop on no graphics device at all, and only its answer is passed to `InitWindow`.
+The port keeps that order: `main()` runs `RunSetupDialog()` before
+`CCoreDX11Device`/`CCoreWindowHandlerWin` exist.
+
+The controls come from the resource, which is a *resourceless* DLGTEMPLATE
+(`Setup_Dialog_Without_Social.h`, 209x146 DLU, 12 items, Verdana 8pt); its exact
+geometry was recovered by parsing that blob, and `ui.cpp` scales those
+proportions to ImGui's 13px font (400x280). Two entries are easy to get wrong:
+
+* the combo is `AspectRatiosX/Y = {4,5,16,21,1,16,3,17,64}/{3,4,9,9,1,10,2,9,27}`
+  behind a `"%d:%d (auto)"` first entry - **not** a short hard-coded list;
+* both checkboxes are ticked on open (`SetupDialog.cpp:123-124`), and `Fullscreen`
+  defaults on, which is why `--no-ui` runs are windowed but the dialog is not.
+
+Built on SDL3 + ImGui with `SDL_CreateRenderer` (sdlrenderer3), so it never
+touches the D3D11/Vulkan path: no swap chain, no render pass, no image layout.
+That was the whole point - an earlier attempt drew the dialog *inside* the demo
+window and fought the engine's render target state until it crashed.
+
+Two answers reach the engine: the resolution and fullscreen flag go into
+`CCoreWindowParameters`, and **Monitor Aspect** is written to
+`src/platform/phx_monitor_aspect.*`, which `CapexRenderTargetCollection::
+UpdateCollection()` (Phoenix_Tool/apxProject.cpp) reads where it used to read the
+unvendored editor's `Config::MonitorAspectX/Y`. `(auto)` = the real display, which
+is the value the port had hard-coded, so nothing changes unless the user picks
+something else.
+
+### The resize crash (this was the intermittent one)
+
+The port makes the window resizable; the original never resized anything
+(`InitWindow` creates `phxBackBufferView` once, `WindowHandler.cpp:97-98`). So
+`CCoreDX11Device::Resize` -> `IDXGISwapChain::ResizeBuffers` is reachable, e.g.
+on the fullscreen transition, and it segfaulted every time.
+
+Root cause: `SwapChainImpl::DestroyBackBufferObjects()` released the back-buffer
+`Texture2DImpl`, and views do **not** hold a reference to their resource in this
+shim. The player's global `phxBackBufferView` - the render target the timeline
+composites the finished frame into - was left pointing at freed memory, which read
+back as "no VkImage", so the layout transition was skipped and
+`vkCmdBeginRendering` got a null image view.
+
+Fix: the back buffer wrapper is *reused* across a resize (only its cached
+width/height/format are refreshed), because everything in it - `vkImage()`,
+`vkSwapchainView()`, `currentLayout()` - already resolves to the live swap chain,
+so nothing about it belongs to one generation of images. `ResizeBuffers` now drops
+only the swap chain's own RTV. Verified: `--no-ui --fullscreen --frames 60`
+reaches frame 60 and exits 0 through the 1470x786 -> 1470x923 recreate, and the
+post-resize frame keeps the sRGB-encoded levels (mean 0.25/10.98/17.88 against
+0.40/13.97/22.66 for the same present windowed).
+
+Worth knowing: the back-buffer RTV's format is **not** carried by the image view
+(`ViewImpl::vkView()` returns the swap chain's own view for a dynamic swap-chain
+view) but by `PipelineKey::color[]`, which feeds
+`VkPipelineRenderingCreateInfo::pColorAttachmentFormats`. That is why the sRGB
+back-buffer view encodes correctly, and why a resize cannot lose it.
+
 ## MILESTONE 4: the original MVX synthesiser produces the music
 
 MVX is closed source - "REALTIME BUZZ-BASED SYNTHESIZER" by Gargaj/Conspiracy,
@@ -295,17 +364,18 @@ reproducible.  Run both after any `third_party` change.
 
 ## Open work
 
-1. `compat/d3d11.h` + friends (declarations) - in progress.
-2. `src/d3d11/*` D3D11-on-Vulkan shim + headless render smoke test - in progress.
-3. `src/platform/window_sdl.cpp` (SDL3 `CCoreWindowHandler`) - in progress.
-4. `CXMLDocument`/`CXMLNode` rewritten on the vendored RapidXML (removes the
-   MSXML/COM contamination of every Phoenix_Tool header) - in progress.
-5. `compat/D3DX10Math.h` + `src/d3dx/d3dxmath.cpp` - in progress.
-6. `include(cmake/engine.cmake)` in CMakeLists.txt - **written but not yet
-   wired in**, because three agents are currently editing CMakeLists.txt.
-   Add the one line once they are done.
-7. Write `src/player/main.cpp` (load `.apx` -> build scene -> run the timeline
-   -> present), then test with Clean Slate.
+1. The one-time >=40 s stall at demo frame 6009 (50.08 s). Measured: 12 frames
+   from 3700/5000 cost ~7.4 s each, from 6000 more than 60 s; frames
+   6010/6020/6060 are fast again, so it is a single one-time event. Cause is
+   believed to be synchronous lazy resource generation when the scene first
+   becomes active (SHADERTOY event 167 spans `[5461, 33620)`; type-4
+   PARTICLECALC events start at 5461). `FrameWatchdog` in `src/player/main.cpp`
+   exists so that a stall like this aborts with the frame number instead of
+   taking the desktop with it.
+2. `--fixed-fps` cannot keep up with Clean Slate's 120 fps; it is an offline
+   tool, not a playback mode (documented).
+3. The MVX synth itself is still Windows-only, so the music comes from a
+   pre-rendered track (see MILESTONE 4).
 
 ## Verified details worth not re-deriving
 

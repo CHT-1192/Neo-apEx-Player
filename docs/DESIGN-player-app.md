@@ -71,17 +71,31 @@ synthesised** by this player.  Two consequences:
 
 ```
 neo_apex_player <project.apx> [options]
-  --width N --height N        window size (default: derived from AspectX/AspectY)
-  --fullscreen
+  --ui | --no-ui              show / skip the setup dialog (shown by default: the
+                              release player opens one before it creates anything)
+  --width N --height N        pre-select this mode in the dialog's Resolution list;
+                              without the dialog, the window size
+  --fullscreen                --no-ui only: start fullscreen
+  --windowed                  pre-select the dialog's Fullscreen box off
   --frames N                  render exactly N frames and exit (deterministic;
                               implies --fixed-step)
   --start-frame N             begin at a given frame
   --fixed-fps N               ignore the clock, advance one frame per present
-  --audio FILE | --audio-cache FILE
-  --dump-frame N=path.png     write one frame to disk
+  --music FILE                play a pre-rendered track (WAV or .apxsndcache)
+  --no-audio                  never open an audio device
+  --frame-timeout MS          abort if one frame exceeds MS (default 5000; 0 off)
+  --dump-frame N=path.ppm     write one frame to disk
   --validate                  enable Vulkan validation layers
   --vsync | --no-vsync
 ```
+
+The setup dialog is the release player's own, reproduced window-for-window
+(`src/player/ui.cpp`, and see STATUS.md MILESTONE 5): it is a separate
+parentless window on SDL3 + ImGui with its own `SDL_Renderer`, and it is torn
+down before the engine's window or device exists. Its Resolution and Fullscreen
+answers become the engine window's parameters, and its Monitor Aspect answer
+reaches the render-target aspect correction
+(`src/platform/phx_monitor_aspect.h`).
 
 ## First milestone / acceptance test
 

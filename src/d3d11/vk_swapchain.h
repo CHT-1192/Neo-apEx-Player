@@ -44,7 +44,22 @@ public:
   VkResult Present();
 
   VkSemaphore SubmitWaitSemaphore() const { return m_acquireSemaphore; }
-  VkSemaphore RenderFinishedSemaphore() const { return m_renderFinishedSemaphore; }
+  // One per swap chain image.  A single shared semaphore would have to be reused
+  // while the previous frame's present might still be waiting on it, which the
+  // spec forbids (and which showed up as "Semaphore must not have any pending
+  // operations" from the validation layers).
+  VkSemaphore RenderFinishedSemaphore() const
+  {
+    return m_current < m_renderFinishedSemaphores.size() ? m_renderFinishedSemaphores[m_current] : VK_NULL_HANDLE;
+  }
+  // Hands the acquire semaphore to whichever submission comes first this frame.
+  // Registered with phxvk::vkSetAcquireWaitHook() by the D3D11 swap chain.
+  VkSemaphore TakeAcquireWait()
+  {
+    if (!m_submitWaitsOnAcquire) return VK_NULL_HANDLE;
+    m_submitWaitsOnAcquire = false;
+    return m_acquireSemaphore;
+  }
   // Consumes the "an image was acquired with a semaphore wait pending" flag.
   bool TakeSubmitWaitsOnAcquire()
   {
@@ -90,7 +105,7 @@ private:
   std::vector<VkImageLayout> m_layouts;
 
   VkSemaphore m_acquireSemaphore = VK_NULL_HANDLE;
-  VkSemaphore m_renderFinishedSemaphore = VK_NULL_HANDLE;
+  std::vector<VkSemaphore> m_renderFinishedSemaphores;
 
   uint32_t m_width = 0;
   uint32_t m_height = 0;
@@ -99,6 +114,7 @@ private:
   VkPresentModeKHR m_presentMode = VK_PRESENT_MODE_FIFO_KHR;
   uint32_t m_current = 0;
   bool m_submitWaitsOnAcquire = false;
+  bool m_suboptimal = false;
   DXGI_SWAP_CHAIN_DESC m_desc{};
 };
 

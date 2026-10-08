@@ -22,6 +22,7 @@ VkBuffer g_ringBuffer = VK_NULL_HANDLE;
 VkDeviceMemory g_ringMemory = VK_NULL_HANDLE;
 uint64_t g_ringCapacity = 0;
 uint64_t g_ringOffset = 0;
+AcquireWaitHook g_acquireWaitHook = nullptr;
 uint8_t *g_ringMapped = nullptr;
 
 const uint64_t kRingDefaultSize = 64ull * 1024ull * 1024ull;
@@ -521,12 +522,32 @@ VkDeviceMemory AllocateAndBindBuffer(VkBuffer buffer, VkMemoryRequirements req, 
 
 VkCommandBuffer FrameCommandBuffer() { return g_device.frameCmd; }
 
+static void FlushDeferred(Device &d); // defined below FrameWaitIdle()
+
 void FrameBegin()
 {
   Device &d = g_device;
   if (d.frameActive) return;
   vkWaitForFences(d.device, 1, &d.frameFence, VK_TRUE, UINT64_MAX);
   vkResetFences(d.device, 1, &d.frameFence);
+
+  // Release what the engine freed during the previous frame.
+  //
+  // This is the ONLY point where it is both safe and guaranteed to happen.
+  // Safe, because the fence above means every submission of the previous frame
+  // has completed (one queue, in order).  Guaranteed, because FrameBegin() runs
+  // once per frame - whereas FrameWaitIdle() is reached only from
+  // SubmitAndWait()/ClearState(), which steady playback never calls.
+  //
+  // Without this the lists grew without bound: a material that is rebuilt every
+  // frame - what shadertoy events do - destroys and recreates a render target
+  // each time, and each one is a full-size RGBA16F image.  Measured cost of the
+  // omission, 12 frames from a given start:
+  //     frame 1000 -> 7.5 s      frame 3000 -> 7.5 s      frame 6000 -> 335 s
+  // i.e. 28 seconds per frame once the leak had the machine swapping, which is
+  // also what made the beachball appear and the whole desktop stall.
+  FlushDeferred(d);
+
   vkResetCommandBuffer(d.frameCmd, 0);
 
   VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
@@ -543,6 +564,19 @@ void FrameEndAndSubmit()
   vkEndCommandBuffer(d.frameCmd);
 
   VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+
+  // Wait on the back buffer's acquire semaphore if this is the first submission
+  // of the frame; see vkSetAcquireWaitHook().  ALL_COMMANDS because the frame
+  // command buffer both draws into the image and transitions its layout.
+  VkSemaphore acquireWait = g_acquireWaitHook ? g_acquireWaitHook() : VK_NULL_HANDLE;
+  VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+  if (acquireWait != VK_NULL_HANDLE)
+  {
+    si.waitSemaphoreCount = 1;
+    si.pWaitSemaphores = &acquireWait;
+    si.pWaitDstStageMask = &waitStage;
+  }
+
   si.commandBufferCount = 1;
   si.pCommandBuffers = &d.frameCmd;
   PHXVK_CHECK(vkQueueSubmit(d.queue, 1, &si, d.frameFence));
@@ -550,10 +584,10 @@ void FrameEndAndSubmit()
   d.frameIndex++;
 }
 
-void FrameWaitIdle()
+// Destroys everything the engine released earlier.  Only call once the GPU is
+// known to be finished with them.
+static void FlushDeferred(Device &d)
 {
-  Device &d = g_device;
-  vkDeviceWaitIdle(d.device);
   for (auto &p : d.deferredFree)
   {
     vkDestroyBuffer(d.device, p.first, nullptr);
@@ -570,6 +604,17 @@ void FrameWaitIdle()
     vkDestroyImageView(d.device, v, nullptr);
   d.deferredFreeViews.clear();
 }
+
+void FrameWaitIdle()
+{
+  Device &d = g_device;
+  vkDeviceWaitIdle(d.device);
+  FlushDeferred(d);
+}
+
+// Not inside the anonymous namespace above: this is part of the API the
+// presentation layer calls, so it needs external linkage.
+void vkSetAcquireWaitHook(AcquireWaitHook hook) { g_acquireWaitHook = hook; }
 
 void DeferFree(VkBuffer buffer, VkDeviceMemory memory)
 {
