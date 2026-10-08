@@ -50,6 +50,7 @@ set(APEX_THIRD_PARTY ${CMAKE_CURRENT_SOURCE_DIR}/third_party/apEx)
 add_library(phx_vk STATIC
   src/rhi/vk_core.cpp
   src/rhi/shader_compiler.cpp
+  src/rhi/gs_emulation.cpp
 )
 target_include_directories(phx_vk PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_include_directories(phx_vk SYSTEM PUBLIC ${VULKAN_INCLUDE_DIRS} ${SHADERC_INCLUDE_DIRS})
@@ -205,6 +206,21 @@ target_include_directories(phx_smoke PRIVATE
   ${APEX_THIRD_PARTY}/Bedrock/UtilLib
 )
 target_link_libraries(phx_smoke PRIVATE phx_d3d11)
+
+# ---------------------------------------------------------------------------
+# Geometry shader emulation (src/rhi/gs_emulation.cpp).
+#
+#   ./build/phx_gs_test
+#
+# Runs the real "Wireframe" geometry shader from Clean Slate -- the one behind
+# the missing background grid -- through the shape reader, the analysis, the
+# GS->VS translation and the fat-geometry builder, and checks the strip layout
+# the emulation hands to the fixed-function assembler.  Exit status == failures.
+add_executable(phx_gs_test
+  tests/gs_emulation_test.cpp
+)
+target_link_libraries(phx_gs_test PRIVATE phx_vk)
+target_compile_options(phx_gs_test PRIVATE -Wno-everything)
 
 # ---------------------------------------------------------------------------
 # GDI-on-CoreText test (src/platform/gdi_posix.cpp).

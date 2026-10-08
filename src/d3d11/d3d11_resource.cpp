@@ -456,6 +456,12 @@ HRESULT DeviceImpl::CreateBuffer(const D3D11_BUFFER_DESC *pDesc, const D3D11_SUB
     if (pInitialData && pInitialData->pSysMem) UploadBufferDataInternal(buf->buffer, 0, pInitialData->pSysMem, pDesc->ByteWidth);
   }
 
+  if (buf->wantsShadow())
+  {
+    buf->shadow.assign(pDesc->ByteWidth, 0);
+    if (pInitialData && pInitialData->pSysMem) memcpy(buf->shadow.data(), pInitialData->pSysMem, pDesc->ByteWidth);
+  }
+
   TrackObjectCreated("ID3D11Buffer", buf);
   *ppBuffer = buf;
   return S_OK;

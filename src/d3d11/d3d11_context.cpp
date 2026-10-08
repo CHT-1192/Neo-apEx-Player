@@ -2222,6 +2222,7 @@ void ContextImpl::UpdateSubresource(ID3D11Resource *pDstResource, UINT DstSubres
       return;
     }
     UploadBufferData(buf->buffer, offset, pSrcData, size);
+    if (buf->shadow.size() >= offset + size) memcpy(buf->shadow.data() + offset, pSrcData, (size_t)size);
     return;
   }
 
@@ -2444,6 +2445,8 @@ HRESULT ContextImpl::Map(ID3D11Resource *pResource, UINT Subresource, D3D11_MAP 
       }
       buf->mappedPtr = buf->ring.mapped;
       buf->mapped = true;
+      if (buf->shadow.size() == buf->desc.ByteWidth && MapType != D3D11_MAP_WRITE_DISCARD)
+        memcpy(buf->ring.mapped, buf->shadow.data(), buf->shadow.size());
       pMappedResource->pData = buf->ring.mapped;
       pMappedResource->RowPitch = buf->desc.ByteWidth;
       pMappedResource->DepthPitch = buf->desc.ByteWidth;
@@ -2507,6 +2510,8 @@ void ContextImpl::Unmap(ID3D11Resource *pResource, UINT)
       range.size = VK_WHOLE_SIZE;
       vkFlushMappedMemoryRanges(phxvk::Vk().device, 1, &range);
     }
+    if (buf->dynamic && buf->mappedPtr && buf->shadow.size() == buf->desc.ByteWidth)
+      memcpy(buf->shadow.data(), buf->mappedPtr, buf->shadow.size());
     buf->mapped = false;
     return;
   }

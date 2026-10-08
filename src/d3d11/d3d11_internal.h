@@ -171,6 +171,16 @@ struct BufferImpl : public ID3D11Buffer, public ObjectBase
   void *mappedPtr = nullptr;
   bool mapped = false;
 
+  // CPU copy of the contents, kept for vertex and index buffers.  The geometry
+  // shader emulation has to read the original vertices and indices back (see
+  // src/rhi/gs_emulation.h), and D3D11's own contract gives no way to read a
+  // buffer the GPU owns.  Empty for buffers the emulation never needs.
+  std::vector<uint8_t> shadow;
+  bool wantsShadow() const
+  {
+    return !isStaging && (desc.BindFlags & (D3D11_BIND_VERTEX_BUFFER | D3D11_BIND_INDEX_BUFFER)) != 0;
+  }
+
   // A dynamic resource is renamed by Map(WRITE_DISCARD); these are the
   // buffer+offset a descriptor must use right now.
   VkBuffer boundBuffer() const { return dynamic ? ring.buffer : buffer; }
