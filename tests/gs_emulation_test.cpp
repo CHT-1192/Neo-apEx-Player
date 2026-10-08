@@ -22,6 +22,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -455,6 +456,79 @@ float4 p(GSOUT v) : SV_TARGET0
 }
 )GSSRC";
 
+
+// Synthetic fixtures for the shapes Clean Slate does not happen to contain.
+// The emulator is generic over the stream a geometry shader writes and over the
+// primitive it consumes, and these are what pin that down.
+static const char *kPointStream = R"GSSRC(
+struct VSIN  { float3 Position : POSITION0; float3 Normal : NORMAL0; float4 UV : TEXCOORD0; };
+struct VSOUT { float4 Position : SV_POSITION; float4 Data : TEXCOORD0; };
+struct GSOUT { float4 Position : SV_POSITION; float2 UV : TEXCOORD0; };
+cbuffer c : register(b1) { float4x4 worldmat; float4 size; }
+VSOUT v(VSIN x) { VSOUT o; o.Position = mul(worldmat, float4(x.Position,1)); o.Data = x.UV; return o; }
+[maxvertexcount(4)]
+void g( point VSOUT input[1], inout PointStream<GSOUT> OutputStream )
+{
+	for (int i = 0; i < 4; i++)
+	{
+		GSOUT o;
+		o.Position = input[0].Position;
+		o.UV = float2(i, 0);
+		OutputStream.Append(o);
+	}
+}
+)GSSRC";
+
+static const char *kLineStream = R"GSSRC(
+struct VSIN  { float3 Position : POSITION0; };
+struct VSOUT { float4 Position : SV_POSITION; };
+struct GSOUT { float4 Position : SV_POSITION; };
+VSOUT v(VSIN x) { VSOUT o; o.Position = float4(x.Position,1); return o; }
+[maxvertexcount(4)]
+void g( line VSOUT input[2], inout LineStream<GSOUT> OutputStream )
+{
+	GSOUT a; a.Position = input[0].Position; OutputStream.Append(a);
+	GSOUT b; b.Position = input[1].Position; OutputStream.Append(b);
+	OutputStream.RestartStrip();
+	GSOUT c; c.Position = input[0].Position; OutputStream.Append(c);
+	OutputStream.Append(b);
+	OutputStream.RestartStrip();
+}
+)GSSRC";
+
+static const char *kLineAdj = R"GSSRC(
+struct VSIN  { float3 Position : POSITION0; };
+struct VSOUT { float4 Position : SV_POSITION; };
+struct GSOUT { float4 Position : SV_POSITION; };
+VSOUT v(VSIN x) { VSOUT o; o.Position = float4(x.Position,1); return o; }
+[maxvertexcount(6)]
+void g( lineadj VSOUT input[4], inout TriangleStream<GSOUT> OutputStream )
+{
+	GSOUT a; a.Position = input[0].Position; OutputStream.Append(a);
+	GSOUT b; b.Position = input[1].Position; OutputStream.Append(b);
+	GSOUT c; c.Position = input[2].Position; OutputStream.Append(c);
+	OutputStream.RestartStrip();
+	OutputStream.Append(a);
+	OutputStream.Append(c);
+	OutputStream.Append(input[3].Position);
+	OutputStream.RestartStrip();
+}
+)GSSRC";
+
+static const char *kNoRestart = R"GSSRC(
+struct VSIN  { float3 Position : POSITION0; };
+struct VSOUT { float4 Position : SV_POSITION; };
+struct GSOUT { float4 Position : SV_POSITION; };
+VSOUT v(VSIN x) { VSOUT o; o.Position = float4(x.Position,1); return o; }
+[maxvertexcount(3)]
+void g( triangle VSOUT input[3], inout TriangleStream<GSOUT> OutputStream )
+{
+	GSOUT a; a.Position = input[0].Position; OutputStream.Append(a);
+	GSOUT b; b.Position = input[1].Position; OutputStream.Append(b);
+	GSOUT c; c.Position = input[2].Position; OutputStream.Append(c);
+}
+)GSSRC";
+
 int main()
 {
   printf("gs_emulation: the Wireframe material from Clean Slate\n");
@@ -539,6 +613,47 @@ int main()
   Check(!pbrVs.empty(), "the PBR geometry shader translates");
   Check(pbrVs.find("GSEMU_PACKED { VSIN a0; VSIN a1; VSIN a2; }") != std::string::npos,
         "the packed input carries all three triangle vertices");
+
+  // --- the shapes Clean Slate has none of --------------------------------
+  printf("\ngs_emulation: streams and primitives Clean Slate does not contain\n");
+  {
+    const struct { const char *name; const char *src; const char *stream; int prim; bool strips; } cases[] = {
+      { "PointStream",   kPointStream, "PointStream",  1, false },
+      { "LineStream",    kLineStream,  "LineStream",   2, true  },
+      { "lineadj",       kLineAdj,     "TriangleStream", 4, true },
+      { "no RestartStrip", kNoRestart, "TriangleStream", 3, true },
+    };
+    for (const auto &c : cases)
+    {
+      const phxvk::GeometryShaderInfo sh = phxvk::DescribeGeometryShader(c.src, strlen(c.src), "g");
+      Check(sh.present, "%s: recognised as a geometry shader", c.name);
+      Check(sh.inputPrimitive == (c.prim == 1 ? "point" : c.prim == 2 ? "line" : c.prim == 4 ? "lineadj" : "triangle"),
+            "%s: input primitive is '%s' (got '%s')", c.name, c.prim == 1 ? "point" : c.prim == 2 ? "line" : c.prim == 4 ? "lineadj" : "triangle", sh.inputPrimitive.c_str());
+      Check(sh.outputStream == c.stream, "%s: output stream is %s (got '%s')", c.name, c.stream, sh.outputStream.c_str());
+
+      const phxvk::GsProgram g = phxvk::AnalyseGeometryShader(c.src, "g", "v", sh);
+      Check(g.ok, "%s: accepted for emulation%s%s", c.name, g.ok ? "" : ": ", g.ok ? "" : g.reason.c_str());
+      Check(g.inputVertices == c.prim, "%s: packs %d vertices per emitted vertex (got %d)", c.name, c.prim, g.inputVertices);
+      Check(g.strips == c.strips, "%s: strips=%s (got %s)", c.name, c.strips ? "true" : "false", g.strips ? "true" : "false");
+
+      // Two input primitives, so the separator between them is exercised.
+      std::vector<float> vx((size_t)c.prim * 2 * 3);
+      for (size_t i = 0; i < vx.size(); i++) vx[i] = (float)i;
+      const size_t stride = 3 * sizeof(float);
+      phxvk::FatGeometry fat;
+      std::string err;
+      const bool ok = phxvk::BuildFatGeometry(g, vx.data(), vx.size() * sizeof(float), stride, true, nullptr, c.prim * 2, 0, fat, &err);
+      Check(ok, "%s: the fat geometry was built%s%s", c.name, ok ? "" : ": ", ok ? "" : err.c_str());
+      if (ok)
+      {
+        Check(fat.vertexCount == (uint32_t)(2 * g.slots), "%s: 2 primitives * %d slots = %u vertices (got %u)",
+              c.name, g.slots, 2 * (uint32_t)g.slots, fat.vertexCount);
+        const size_t separators = std::count(fat.indices.begin(), fat.indices.end(), phxvk::kPrimitiveRestartIndex);
+        Check(c.strips ? separators >= 1 : separators == 0,
+              "%s: %s separator index (got %zu)", c.name, c.strips ? "at least one" : "no", separators);
+      }
+    }
+  }
 
   printf("\n=============================================\n");
   if (g_failures) { printf("%d CHECK(S) FAILED\n", g_failures); return g_failures; }

@@ -277,11 +277,20 @@ GsProgram AnalyseGeometryShader(const std::string &source, const char *gsEntry, 
   GsProgram gs;
   if (!shape.present) { gs.reason = "no [maxvertexcount]; not a geometry shader"; return gs; }
   if (shape.maxVertexCount <= 0 || shape.maxVertexCount > 64) { gs.reason = "maxvertexcount out of range"; return gs; }
-  if (shape.outputStream != "TriangleStream") { gs.reason = "output stream is not a TriangleStream"; return gs; }
-  gs.inputVertices = shape.inputVertices;
-  if (gs.inputVertices != 1 && gs.inputVertices != 2 && gs.inputVertices != 3)
+  if (shape.outputStream != "TriangleStream" && shape.outputStream != "LineStream" && shape.outputStream != "PointStream")
   {
-    gs.reason = "input primitive is not point/line/triangle";
+    gs.reason = "output stream '" + shape.outputStream + "' is not one the emulator can draw";
+    return gs;
+  }
+  gs.outputStream = shape.outputStream;
+  // A PointStream emits independent points: there are no strips to separate, so
+  // no restart index is generated and primitive restart stays off.
+  gs.strips = (shape.outputStream != "PointStream");
+
+  gs.inputVertices = shape.inputVertices;
+  if (gs.inputVertices != 1 && gs.inputVertices != 2 && gs.inputVertices != 3 && gs.inputVertices != 4 && gs.inputVertices != 6)
+  {
+    gs.reason = "input primitive is not point/line/triangle (with or without adjacency)";
     return gs;
   }
 
@@ -504,8 +513,9 @@ bool BuildFatGeometry(const GsProgram &gs, const void *vb, size_t vbSize, size_t
     }
     // Input primitives are independent strips, so one has to be separated from
     // the next.  When the body already restarted after its last slot the strip
-    // is closed and a second restart would just be a no-op.
-    if (gs.restartsAfter.empty() || gs.restartsAfter.back() != gs.slots)
+    // is closed and a second restart would just be a no-op.  A PointStream has
+    // no strips to break.
+    if (gs.strips && (gs.restartsAfter.empty() || gs.restartsAfter.back() != gs.slots))
       out.indices.push_back(kPrimitiveRestartIndex);
   }
 

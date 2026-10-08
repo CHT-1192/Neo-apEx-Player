@@ -1034,6 +1034,16 @@ bool ContextImpl::WriteDescriptorSet(VkDescriptorSet set, const std::vector<Merg
 // geometry shader emulation (src/rhi/gs_emulation.h)
 // ===========================================================================
 
+// The topology the emulated stream is drawn with: whatever the original draw
+// asked for is irrelevant, because the emitted vertices are one per Append.
+static VkPrimitiveTopology EmulatedTopology(const EmulatedGeometryShader *plan)
+{
+  if (!plan) return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+  if (plan->program.outputStream == "PointStream") return VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
+  if (plan->program.outputStream == "LineStream") return VK_PRIMITIVE_TOPOLOGY_LINE_STRIP;
+  return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+}
+
 // The geometry shader the pipeline is about to drop, if one can be reproduced
 // instead.  Null whenever there is nothing to emulate, which is the common case.
 const EmulatedGeometryShader *ContextImpl::EmulationPlanFor(const ShaderCommon *gs) const
@@ -1323,10 +1333,12 @@ bool ContextImpl::PrepareDraw(VkPipeline *outPipeline, VkPipelineLayout *outLayo
 
   VkPipelineInputAssemblyStateCreateInfo inputAssembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
   uint32_t patchControlPoints = 0;
-  inputAssembly.topology = key.emulated ? VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP : ToVkTopology(key.topology, &patchControlPoints);
-  // The emulated strip is rebuilt from the index buffer, and its restarts are
-  // what separate the strips the geometry shader streamed.
-  inputAssembly.primitiveRestartEnable = (key.emulated && emuPlan && !emuPlan->program.restartsAfter.empty()) ? VK_TRUE : VK_FALSE;
+  inputAssembly.topology = key.emulated ? EmulatedTopology(emuPlan) : ToVkTopology(key.topology, &patchControlPoints);
+  // The emulated geometry is rebuilt from the index buffer.  Its restart index
+  // separates the strips the geometry shader streamed, so restart has to be on
+  // whenever separators were generated -- which is always for a stream that is
+  // joined into strips, not only when the body called RestartStrip itself.
+  inputAssembly.primitiveRestartEnable = (key.emulated && emuPlan && emuPlan->program.strips) ? VK_TRUE : VK_FALSE;
   if (key.emulated) patchControlPoints = 0;
   if (inputAssembly.topology == VK_PRIMITIVE_TOPOLOGY_PATCH_LIST && patchControlPoints == 0) patchControlPoints = 1;
 
