@@ -116,6 +116,7 @@ HRESULT CompileCommon(LPCVOID pSrcData, SIZE_T SrcDataSize, const D3D_SHADER_MAC
   ShaderReflectionRecord rec;
   rec.reflection = compiled.reflection;
   rec.stage = stage;
+  rec.geometry = compiled.geometry;
   RegisterShaderReflection(compiled.spirv.data(), compiled.spirv.size() * sizeof(uint32_t), rec);
 
   if (ppCode) *ppCode = CreateBlob(compiled.spirv.data(), compiled.spirv.size() * sizeof(uint32_t));

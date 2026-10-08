@@ -75,14 +75,35 @@ struct Reflection
   std::vector<VertexInput> inputs;
 };
 
+// What a geometry shader consumes and emits, read out of the HLSL by
+// DescribeGeometryShader().  Metal has no geometry shader stage, so the shim
+// drops it and every primitive that shader would have built is absent; to put
+// them back the emulator has to know the shape of the shader it is replacing.
+struct GeometryShaderInfo
+{
+  bool present = false;
+  std::string inputPrimitive; // "point", "line", "triangle", "lineadj", "triangleadj"
+  int inputVertices = 0;      // vertices the input primitive carries (1, 2, 3, ...)
+  int maxVertexCount = 0;     // the [maxvertexcount(N)] attribute
+  std::string outputStream;   // "TriangleStream", "PointStream", "LineStream"
+  std::string outputType;     // the stream's element type
+  int appends = 0;            // OutputStream.Append(...) call sites
+  int restarts = 0;           // OutputStream.RestartStrip() call sites
+};
+
 struct CompiledShader
 {
   bool ok = false;
   std::vector<uint32_t> spirv;
   Reflection reflection;
+  GeometryShaderInfo geometry;
   std::string error;
   std::string rewrittenSource; // post-preprocessing, useful for debugging
 };
+
+// Reads a geometry shader's shape out of its HLSL source.  Returns
+// present == false when the source has no [maxvertexcount] attribute.
+GeometryShaderInfo DescribeGeometryShader(const char *source, size_t length, const char *entryPoint);
 
 // Compiles one entry point.  `debugName` is only used in diagnostics.
 CompiledShader CompileHLSL(const char *source, size_t length, const char *entryPoint, ShaderStage stage, const char *debugName);

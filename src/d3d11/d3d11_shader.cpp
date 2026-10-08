@@ -5,6 +5,8 @@
 // for it.
 #include "d3d11_internal.h"
 
+#include <set>
+
 #include "dxgi_formats.h"
 
 #include <cstdio>
@@ -80,6 +82,30 @@ bool BuildShaderCommon(const void *bytecode, SIZE_T length, phxvk::ShaderStage s
     out->reflection = rec.reflection;
   else
     phxvk::LogWarn("%s: no reflection registered for this module; anything bound to it will use dummy descriptors", what);
+
+  // Remember the discarded geometry shader's shape.  Its stage cannot run on
+  // this device, but what it would have built is recoverable from this.
+  if (geometryRequested && rec.geometry.present)
+  {
+    // One line per distinct shape rather than one line ever: the shapes are
+    // what has to be emulated, so seeing all of them matters.
+    char shape[192];
+    snprintf(shape, sizeof shape, "%s|%d|%s<%s>|%d|%d",
+             rec.geometry.inputPrimitive.empty() ? "?" : rec.geometry.inputPrimitive.c_str(),
+             rec.geometry.maxVertexCount,
+             rec.geometry.outputStream.empty() ? "?" : rec.geometry.outputStream.c_str(),
+             rec.geometry.outputType.empty() ? "?" : rec.geometry.outputType.c_str(),
+             rec.geometry.appends, rec.geometry.restarts);
+    static std::set<std::string> seen;
+    if (seen.size() < 8 && seen.insert(shape).second)
+      phxvk::LogWarn("[d3d11] geometry shader shape to emulate: %s in -> up to %d vertices, %s<%s>, "
+                     "%d Append / %d RestartStrip.",
+                     rec.geometry.inputPrimitive.empty() ? "?" : rec.geometry.inputPrimitive.c_str(),
+                     rec.geometry.maxVertexCount,
+                     rec.geometry.outputStream.empty() ? "?" : rec.geometry.outputStream.c_str(),
+                     rec.geometry.outputType.empty() ? "?" : rec.geometry.outputType.c_str(),
+                     rec.geometry.appends, rec.geometry.restarts);
+  }
 
   if (geometryRequested && phxvk::Vk().features.geometryShader == VK_FALSE && OnceGsUnsupported()())
     phxvk::LogWarn("[d3d11] VkPhysicalDeviceFeatures::geometryShader is false (MoltenVK/Metal). Geometry "

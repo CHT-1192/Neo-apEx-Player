@@ -65,6 +65,8 @@ struct ShaderReflectionRecord
 {
   phxvk::Reflection reflection;
   phxvk::ShaderStage stage = phxvk::ShaderStage::Vertex;
+  // Set for geometry stages: the shape of the shader the device cannot run.
+  phxvk::GeometryShaderInfo geometry;
 };
 // Registers the reflection of a compiled blob, keyed by its SPIR-V bytes, so
 // that CreateVertexShader()/D3DReflect() can recover it from a plain SPIR-V

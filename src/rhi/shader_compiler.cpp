@@ -9,6 +9,8 @@
 #include <unordered_map>
 #include <map>
 #include <set>
+#include <cstdlib>
+#include <cctype>
 #include <sstream>
 
 namespace phxvk
@@ -818,7 +820,117 @@ std::string FailureKey(const std::string &src, const char *entry, int stage)
   return std::to_string(h) + "|" + (entry ? entry : "") + "|" + std::to_string(stage);
 }
 
+// ---------------------------------------------------------------------------
+// Geometry shader description (see GeometryShaderInfo).
+//
+// The engine writes one entry point per stage into the same HLSL blob, e.g.
+//
+//   [maxvertexcount(6)]
+//   void g( line VSOUT input[2], inout TriangleStream<GSOUT> OutputStream )
+//   { ... OutputStream.Append(o); ... OutputStream.RestartStrip(); ... }
+//
+// Everything an emulation needs is in that signature and in the body's call
+// sites, so read it here instead of rediscovering it later.  IsIdentChar()
+// earlier in this unnamed namespace is reused as-is.
+// ---------------------------------------------------------------------------
+
+// The text between the parentheses that follow the entry point's identifier.
+bool FindEntryParameters(const std::string &src, const char *entry, std::string &out)
+{
+  if (!entry || !*entry) return false;
+  const size_t nameLen = strlen(entry);
+  for (size_t at = src.find(entry); at != std::string::npos; at = src.find(entry, at + 1))
+  {
+    if (at > 0 && IsIdentChar(src[at - 1])) continue;
+    const size_t after = at + nameLen;
+    if (after < src.size() && IsIdentChar(src[after])) continue;
+    size_t p = after;
+    while (p < src.size() && isspace((unsigned char)src[p])) p++;
+    if (p >= src.size() || src[p] != '(') continue;
+    int depth = 0;
+    const size_t begin = p;
+    for (; p < src.size(); p++)
+    {
+      if (src[p] == '(') depth++;
+      else if (src[p] == ')' && --depth == 0)
+      {
+        out = src.substr(begin + 1, p - begin - 1);
+        return true;
+      }
+    }
+    return false;
+  }
+  return false;
+}
+
+int CountCalls(const std::string &body, const char *name)
+{
+  int n = 0;
+  const size_t len = strlen(name);
+  for (size_t at = body.find(name); at != std::string::npos; at = body.find(name, at + len))
+  {
+    size_t p = at + len;
+    while (p < body.size() && isspace((unsigned char)body[p])) p++;
+    if (p < body.size() && body[p] == '(') n++;
+  }
+  return n;
+}
+
 } // namespace
+
+GeometryShaderInfo DescribeGeometryShader(const char *source, size_t length, const char *entryPoint)
+{
+  GeometryShaderInfo info;
+  const std::string src(source, length);
+  if (src.find("maxvertexcount") == std::string::npos) return info;
+  info.present = true;
+
+  {
+    const size_t at = src.find("maxvertexcount");
+    const size_t open = src.find('(', at);
+    if (open != std::string::npos) info.maxVertexCount = atoi(src.c_str() + open + 1);
+  }
+
+  std::string params;
+  if (FindEntryParameters(src, entryPoint, params))
+  {
+    const size_t inout = params.find("inout");
+    const std::string in = (inout == std::string::npos) ? params : params.substr(0, inout);
+
+    size_t p = 0;
+    while (p < in.size() && !IsIdentChar(in[p])) p++;
+    const size_t wordStart = p;
+    while (p < in.size() && IsIdentChar(in[p])) p++;
+    info.inputPrimitive = in.substr(wordStart, p - wordStart);
+
+    if (info.inputPrimitive == "point") info.inputVertices = 1;
+    else if (info.inputPrimitive == "line") info.inputVertices = 2;
+    else if (info.inputPrimitive == "triangle") info.inputVertices = 3;
+    else if (info.inputPrimitive == "lineadj") info.inputVertices = 4;
+    else if (info.inputPrimitive == "triangleadj") info.inputVertices = 6;
+
+    if (inout != std::string::npos)
+    {
+      const size_t lt = params.find('<', inout);
+      const size_t gt = (lt == std::string::npos) ? std::string::npos : params.find('>', lt);
+      if (lt != std::string::npos && gt != std::string::npos)
+      {
+        info.outputType = params.substr(lt + 1, gt - lt - 1);
+        size_t q = inout + 5;
+        while (q < lt && !IsIdentChar(params[q])) q++;
+        const size_t s2 = q;
+        while (q < lt && IsIdentChar(params[q])) q++;
+        info.outputStream = params.substr(s2, q - s2);
+      }
+    }
+  }
+
+  const size_t brace = src.find('{', src.find("maxvertexcount"));
+  const std::string body = (brace == std::string::npos) ? src : src.substr(brace);
+  info.appends = CountCalls(body, "Append");
+  info.restarts = CountCalls(body, "RestartStrip");
+  return info;
+}
 
 CompiledShader CompileHLSL(const char *source, size_t length, const char *entryPoint, ShaderStage stage, const char *debugName)
 {
@@ -884,6 +996,7 @@ CompiledShader CompileHLSL(const char *source, size_t length, const char *entryP
     result.spirv.resize(bytes / 4);
     memcpy(result.spirv.data(), data, bytes);
     result.reflection = ReflectSpirv(result.spirv);
+    if (stage == ShaderStage::Geometry) result.geometry = DescribeGeometryShader(source, length, entryPoint);
     result.ok = true;
   }
 
