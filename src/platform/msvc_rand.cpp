@@ -8,6 +8,12 @@
 // the original tool.  Defining these two symbols in the executable overrides
 // libSystem for code in this process only, and reproduces the Windows CRT
 // generator bit-for-bit.
+//
+// The generator is only half of it: RAND_MAX has to be the Windows value too,
+// and compat/stdlib.h is what pins it.  Without that the engine kept macOS's
+// 0x7fffffff and every `rand()/(float)RAND_MAX` came out as ~0 - which is not
+// a rounding difference but a hang (see compat/stdlib.h for the particle
+// emitter loop it never escaped).
 #include <cstdlib>
 
 namespace

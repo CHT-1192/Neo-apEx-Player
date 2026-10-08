@@ -186,13 +186,27 @@ static bool ParseArgs(int argc, char **argv, Options &o)
 
 // <songfile> in the .apx is a Windows-style path relative to the project
 // (".\\step010padding.mvm"), so normalise and resolve it next to the .apx.
-// Single-frame watchdog.
+
+// ---------------------------------------------------------------------------
+// timing
 //
-// A bug that makes one frame take minutes is not just slow, it takes the whole
-// machine with it: the process sits at 100% of a core and the window server
-// stops responding, so the only way out is Force Quit.  That happened here
-// (demo frame ~6008, for reasons still being narrowed down), and no amount of
-// "it should be faster" is an excuse for hanging someone's desktop.
+// A frame that takes a minute is the one thing this player must never do
+// quietly: the whole desktop stops responding and the only way out is Force
+// Quit.  That happened at demo frame ~6008, so every frame now carries its own
+// phase timings and reports itself when it goes over budget, instead of the
+// stall being something to rediscover each time.
+static uint64_t NowSteadyMs()
+{
+  using namespace std::chrono;
+  return (uint64_t)duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
+}
+
+// Above this a frame is reported with its breakdown (update / timeline /
+// generator / dump / present).  Ordinary frames are a few ms.
+static const uint64_t kSlowFrameMs = 250;
+
+//
+// Single-frame watchdog.
 //
 // The watchdog runs on its own thread and, if a frame exceeds the budget, says
 // which frame it was stuck on and exits the process.  It is deliberately
@@ -219,12 +233,6 @@ public:
   }
 
 private:
-  static uint64_t NowSteadyMs()
-  {
-    using namespace std::chrono;
-    return (uint64_t)duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
-  }
-
   void Start()
   {
     frameStartMs.store(NowSteadyMs(), std::memory_order_relaxed);
@@ -764,13 +772,23 @@ int main(int argc, char **argv)
     // value: that counts the steps taken (so it is > 0 even on the call that
     // drains the queue), which made this loop spin.
     const int itemsAtStart = UpdateQueue.NumItems();
+    const uint64_t startedAt = NowSteadyMs();
+    uint64_t slowestRound = 0;
+    int slowestRoundIndex = -1;
     int rounds = 0;
     while (UpdateQueue.NumItems() > 0)
     {
+      const uint64_t roundStart = NowSteadyMs();
       ProcessGeneratorQueue(100, &device);
-      if (rounds < 2)
-        phxvk::LogInfo("generator round %d: %d item(s) queued, head type %d", rounds + 1, UpdateQueue.NumItems(),
-                       UpdateQueue.NumItems() ? (int)UpdateQueue[0]->GetType() : -1);
+      const uint64_t roundMs = NowSteadyMs() - roundStart;
+      if (roundMs > slowestRound)
+      {
+        slowestRound = roundMs;
+        slowestRoundIndex = rounds;
+      }
+      if (roundMs >= kSlowFrameMs)
+        phxvk::LogInfo("generator round %d: %.0f ms, %d item(s) left (head type %d)", rounds, (double)roundMs,
+                       UpdateQueue.NumItems(), UpdateQueue.NumItems() ? (int)UpdateQueue[0]->GetType() : -1);
       if (++rounds > 100000)
       {
         phxvk::LogError("resource generation did not converge; %d item(s) still queued, head type %d",
@@ -778,7 +796,9 @@ int main(int argc, char **argv)
         break;
       }
     }
-    phxvk::LogInfo("resource generation: %d rounds, %d item(s) left", rounds, UpdateQueue.NumItems());
+    phxvk::LogInfo("resource generation: %d rounds, %d item(s) left, %.2f s total (slowest round %d: %.0f ms)",
+                   rounds, UpdateQueue.NumItems(), (NowSteadyMs() - startedAt) / 1000.0, slowestRoundIndex,
+                   (double)slowestRound);
   }
 
   // ---------------------------------------------------------------------
@@ -855,6 +875,9 @@ int main(int argc, char **argv)
     float frame = (float)clock.Frame();
     if (song.valid && clock.Finished()) break;
 
+    const uint64_t tFrame = NowSteadyMs();
+    uint64_t tUpdate = tFrame, tTimeline = tFrame, tGenerator = tFrame, tDump = tFrame;
+
     // Call the timeline directly with tool=false.
     //
     // CphxTimeline_Tool::Render() passes tool=true, and the engine uses that
@@ -891,6 +914,7 @@ int main(int argc, char **argv)
       }
     }
 
+    tUpdate = NowSteadyMs();
     Project.Timeline->Timeline->EventCount = (unsigned short)Project.Timeline->Events.NumItems();
     Project.Timeline->Timeline->Render(frame, false, false);
     if (fixedDiagLeft > 0)
@@ -898,11 +922,13 @@ int main(int argc, char **argv)
       fixedDiagLeft--;
       phxvk::LogInfo("frame %lld: timeline target %p", (long long)frame, (void *)Project.Timeline->Timeline->Target);
     }
+    tTimeline = NowSteadyMs();
 
     // Events can activate resources that were not needed at load time; the
     // timeline re-arms them, so service the queue every frame.  It is cheap
     // when empty.
     ProcessGeneratorQueue(20, &device);
+    tGenerator = NowSteadyMs();
 
     // Dump before Present: the back buffer still holds what the timeline blitted
     // into it.
@@ -933,8 +959,35 @@ int main(int argc, char **argv)
       }
     }
 
+    tDump = NowSteadyMs();
     device.ForceStateReset();
     if (SwapChain) SwapChain->Present(winVsync ? 1 : 0, 0);
+
+    // Say where a slow frame went rather than leaving it to be rediscovered.
+    // The active events are part of the report because a stall this large is
+    // almost always the first frame on which some event's content is needed.
+    {
+      const uint64_t tPresent = NowSteadyMs();
+      if (tPresent - tFrame >= kSlowFrameMs)
+      {
+        char active[512];
+        int used = 0;
+        active[0] = 0;
+        CphxTimeline_Tool *tt = Project.Timeline;
+        for (TS32 i = 0; i < tt->Events.NumItems() && used < (int)sizeof(active) - 24; i++)
+        {
+          CphxEvent_Tool *e = tt->Events[i];
+          if (!e->Event) continue;
+          if (!(e->Event->StartFrame <= frame && frame < e->Event->EndFrame)) continue;
+          used += snprintf(active + used, sizeof(active) - used, "%s%d:%d", used ? " " : "", (int)i, (int)e->Type);
+        }
+        phxvk::LogWarn("slow frame %lld: %.0f ms (update %.0f, timeline %.0f, generator %.0f, dump %.0f, present %.0f) "
+                       "active events [%s]",
+                       (long long)frame, (double)(tPresent - tFrame), (double)(tUpdate - tFrame),
+                       (double)(tTimeline - tUpdate), (double)(tGenerator - tTimeline), (double)(tDump - tGenerator),
+                       (double)(tPresent - tDump), active);
+      }
+    }
 
     if (opt.fixedFps) clock.AdvanceFixedStep();
     else clock.Update();

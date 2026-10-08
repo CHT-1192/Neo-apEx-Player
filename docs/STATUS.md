@@ -57,6 +57,73 @@ behind both APIs.
 * Mesh text generation uses Windows GDI glyph outlines + the GLU tessellator;
   macOS provides GLU via the OpenGL framework (verified to build and run).
 
+## MILESTONE 6: the 50-second hang was RAND_MAX
+
+The demo hung for 90+ seconds and the only way out was Force Quit. It was not
+resource generation, and not the shader compiler, and not the GPU. A stack
+sample of the stalled process said it plainly:
+
+```
+main.cpp:919 -> CphxTimeline::Render (Timeline.cpp:355)
+  -> CphxEvent_ParticleCalc::Render (Timeline.cpp:264)
+    -> CphxObject_ParticleEmitter_CPU::UpdateParticles
+      -> CphxObject_ParticleEmitter_CPU::SpawnParticle
+        -> rand()                                       (msvc_rand.cpp:20)
+```
+
+`SpawnParticle` (Phoenix/Scene.cpp:403-406) rejection-samples a point in
+`[-0.5, 0.5]^3` until it lands inside the unit sphere for a spherical emitter:
+
+```cpp
+do { p = D3DXVECTOR3( rand()/(float)RAND_MAX - 0.5f, ... ); }
+while ( !( EmitterType != 1 || D3DXVec3LengthSq( &p ) < 0.25 ) );
+```
+
+`RAND_MAX` in that translation unit was **0x7fffffff** - macOS's value - not the
+MSVC CRT's 0x7fff, so `rand()/(float)RAND_MAX` was in `0..1.5e-5` and the point
+was pinned at the cube's corner, `|p|^2 = 0.75`. The condition was never true
+and the loop never ended.
+
+Three things made this hard to see:
+
+* `src/platform/msvc_rand.cpp` already reproduced the Windows *generator*, and
+  its comment names this exact failure mode ("would push every
+  `rand()/(float)RAND_MAX` far out of the intended 0..1 range") - the constant
+  was the half that was missed.
+* `Bedrock/BaseLib/Random.h` does `#define RAND_MAX 0x7fff`, but only
+  translation units that include `BaseLib.h` ever see it, and
+  `compat/Windows.h` pulls in `<cstdlib>` which redefines it to the macOS value
+  for whoever reads it afterwards.  `Scene.cpp` never includes `BaseLib.h` at
+  all: preprocessing it showed the system `0x7fffffff` as the *only* definition
+  in the translation unit.  `-Wno-everything` hides the redefinition warning.
+* `phxSpline.cpp`'s header comment describes the port relying on Random.h's
+  define, which is exactly the assumption that does not hold.
+
+Fixed in `compat/stdlib.h`: a wrapper that `#include_next`s the real header and
+then pins `RAND_MAX` to 0x7fff, so every translation unit gets the Windows
+semantics the 36 `rand()/(float)RAND_MAX` call sites were written against.
+
+Measured with `--no-ui --no-audio --fixed-fps` (40 frames each, and each of
+these regions used to cost 7.4 s or more *per frame*):
+
+| frames | before | after |
+|---|---|---|
+| 5980-6024 (the old hard hang) | `--frame-timeout 90000` fired | 9 s, exit 0, worst frame 390 ms |
+| 3700-3739 | ~7.4 s/frame | 10 s, worst 338 ms |
+| 4900-4939 | ~7.4 s/frame | 9 s, worst 329 ms |
+| 6050-6089 | hung at 5999, never reached | 9 s, worst 385 ms |
+| 15000-15039 | never reached | 7 s, **then a segfault** - see Open work |
+
+Frame 2999 (24.99 s) still matches the reference video: port mean
+`15.39/46.75/61.97` against the original's `14.19/44.37/59.93`, mean absolute
+difference 4.8/5.3/5.1 per channel, unchanged from before the fix.
+
+`src/player/main.cpp` now reports every frame that exceeds 250 ms with a phase
+breakdown (update / timeline / generator / dump / present) and the list of
+active events, and the startup resource drain reports its slowest round. That
+is what turned "frame 6009 is slow" into the sampled stack above; it is worth
+more than the guesswork it replaced.
+
 ## MILESTONE 5: the release setup dialog, and the resize crash
 
 ### The dialog
@@ -364,14 +431,15 @@ reproducible.  Run both after any `third_party` change.
 
 ## Open work
 
-1. The one-time >=40 s stall at demo frame 6009 (50.08 s). Measured: 12 frames
-   from 3700/5000 cost ~7.4 s each, from 6000 more than 60 s; frames
-   6010/6020/6060 are fast again, so it is a single one-time event. Cause is
-   believed to be synchronous lazy resource generation when the scene first
-   becomes active (SHADERTOY event 167 spans `[5461, 33620)`; type-4
-   PARTICLECALC events start at 5461). `FrameWatchdog` in `src/player/main.cpp`
-   exists so that a stall like this aborts with the frame number instead of
-   taking the desktop with it.
+1. `CphxMaterialSpline::CalculateValue` crashes around demo frames 14990-15010.
+   `Material.cpp:220-224` walks all four `Splines[x]` with no null check, and one
+   of them points at freed memory: a stack sample shows
+   `CphxSpline::CalculateValue` taking the `KeyCount == 1` path (so `Keys` and
+   `KeyCount` are still intact) and then loading *this object's own vptr* as
+   `0x186678`, which is not a vtable - the classic signature of a block reused
+   after free.  Reached only from `CphxEvent_RenderScene::Render` for the scene
+   active in that window; frames 13000 and 20000 are fine.  Not yet diagnosed
+   beyond that.
 2. `--fixed-fps` cannot keep up with Clean Slate's 120 fps; it is an offline
    tool, not a playback mode (documented).
 3. The MVX synth itself is still Windows-only, so the music comes from a
