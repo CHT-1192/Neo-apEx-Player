@@ -1088,9 +1088,31 @@ bool ContextImpl::PrepareDraw(VkPipeline *outPipeline, VkPipelineLayout *outLayo
     stagesCi.push_back(ci);
   };
   addStage(VK_SHADER_STAGE_VERTEX_BIT, kStageVS);
-  // MoltenVK has no geometryShader support; drop the stage (see design doc 3).
-  if (stages[kStageGS].shader && phxvk::Vk().features.geometryShader == VK_FALSE && OnceGsUnsupported()())
-    phxvk::LogWarn("[d3d11] skipping the geometry shader stage for a pipeline (MoltenVK: geometryShader unsupported)");
+  // MoltenVK/Metal has no geometry shader stage, so the stage is dropped and
+  // the pipeline runs vertex -> fragment only.  This is NOT cosmetic: in
+  // Clean Slate 5 of the 34 render techniques carry a geometry shader
+  // ([PBR Mixed Rendering] and its vertex-offset variant, Default Particle,
+  // PointSprites and Wireframe), and they use it to build geometry that the
+  // vertex shader cannot express -- screen-space quads per particle and per
+  // point sprite, the double-sided copy of a triangle, screen-space line
+  // quads for the wireframe grid.  Dropping the stage therefore loses those
+  // primitives outright (the wireframe collapses to one-pixel hairlines, the
+  // two-sided pass disappears) rather than merely shading them differently.
+  if (stages[kStageGS].shader && phxvk::Vk().features.geometryShader == VK_FALSE)
+  {
+    // The shader-creation site owns OnceGsUnsupported(), so counting here needs
+    // its own limiter -- otherwise the count this message exists to report
+    // would never print at all.
+    ++g_gsSkippedPipelines;
+    static int logged = 0;
+    if (logged < 8)
+      phxvk::LogWarn("[d3d11] geometry shader stage DROPPED for pipeline #%u (MoltenVK/Metal has no geometry "
+                     "shaders); any primitive that shader builds is missing. Affected techniques in Clean "
+                     "Slate: [PBR Mixed Rendering] (double-sided triangles), [PBR Mixed Rendering with "
+                     "vertex offset] (flat normals + double-sided), Default Particle and PointSprites "
+                     "(screen-space quads), Wireframe (the background grid). See docs/STATUS.md.",
+                     ++logged);
+  }
   if (phxvk::Vk().features.geometryShader != VK_FALSE) addStage(VK_SHADER_STAGE_GEOMETRY_BIT, kStageGS);
   if (key.hs != 0 && key.ds != 0)
   {

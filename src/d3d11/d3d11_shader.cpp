@@ -82,8 +82,11 @@ bool BuildShaderCommon(const void *bytecode, SIZE_T length, phxvk::ShaderStage s
     phxvk::LogWarn("%s: no reflection registered for this module; anything bound to it will use dummy descriptors", what);
 
   if (geometryRequested && phxvk::Vk().features.geometryShader == VK_FALSE && OnceGsUnsupported()())
-    phxvk::LogWarn("[d3d11] VkPhysicalDeviceFeatures::geometryShader is false (MoltenVK); geometry shaders are created but their stage is skipped at "
-                   "pipeline creation so the demo still renders");
+    phxvk::LogWarn("[d3d11] VkPhysicalDeviceFeatures::geometryShader is false (MoltenVK/Metal). Geometry "
+                   "shaders compile but their stage is dropped at pipeline creation, so every primitive a "
+                   "GS would have built is missing. This is not a no-op: Clean Slate builds particles, point "
+                   "sprites, the wireframe grid and the double-sided triangle pass in geometry shaders. See "
+                   "the message at pipeline creation and docs/STATUS.md.");
 
   return true;
 }

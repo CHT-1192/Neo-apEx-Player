@@ -57,6 +57,63 @@ behind both APIs.
 * Mesh text generation uses Windows GDI glyph outlines + the GLU tessellator;
   macOS provides GLU via the OpenGL framework (verified to build and run).
 
+## MILESTONE 7: the geometry shader stage is not optional
+
+The background grid in Clean Slate (visible at 0:31, 0:33, 0:39, and behind the
+title cards) is missing on this port, and the first thing written about
+geometry shaders here said the opposite -- "their stage is skipped at pipeline
+creation so the demo still renders". That sentence was wrong, and it cost real
+time before it was caught. It is corrected in the code; this is why.
+
+**The grid is a wireframe material, and its thickness comes from a geometry
+shader.** Reading the project rather than the binary settles it:
+
+* event 2's scene is named `++scene / titles`; its object `background/background
+  wire` is a `Plane` whose material GUID resolves to a material literally named
+  `Wireframe`;
+* that material's technique (`2A9BCBB81A1352D113B8B5BF0982D887`) has a PS/VS pair
+  and a GS whose whole job is to turn each line into a screen-space quad:
+
+  ```hlsl
+  [maxvertexcount(6)]
+  void g( line VSOUT input[2], inout TriangleStream<GSOUT> OutputStream )
+  {
+      float2 d = normalize((p2/p2.w).xy - (p1/p1.w).xy);
+      float4 n = float4(-d.y, d.x, 0, 0) * width.x * 0.05;   // the line's width
+      ... six Appends forming two triangles ...
+  }
+  ```
+
+* Metal has no geometry shader stage, so `src/d3d11/d3d11_context.cpp` drops it.
+  What is left is one-pixel hairlines, which is why forcing `LINELIST` to
+  `TRIANGLE_LIST` moved 0.2% of the pixels: there was almost nothing there.
+* There is no cheap way out either. The port never uses `wideLines`, and
+  MoltenVK does not offer it, so the width cannot be recovered by drawing
+  thicker lines.
+
+**It is not just the grid.** 5 of the project's 34 render techniques carry a
+geometry shader, and they are the main ones:
+
+| technique | what its geometry shader builds | lost without it |
+|---|---|---|
+| `Wireframe` | a screen-space quad per line | the background grid |
+| `[PBR Mixed Rendering]` | the reversed copy of a triangle when `dat.z > 0.5` | two-sided geometry |
+| `[PBR Mixed Rendering with vertex offset]` | a flat normal from the triangle, plus the reversed copy | flat shading, two-sided geometry |
+| `Default Particle` | a camera-facing quad per point | particles |
+| `PointSprites` | a quad per triangle at its centroid | point sprites |
+
+`maxvertexcount` is 4 or 6 in every case, i.e. all five are the same shape of
+shader: a fixed-size expansion of one input primitive into a small triangle
+stream. The port now counts and names the affected pipelines instead of
+announcing the skip once and moving on.
+
+Fixing it properly means emulating the geometry shader, not working around it:
+feed the shader all K vertices of the input primitive in one vertex, select the
+k-th `Append` with `SV_VertexID % N`, and rebuild the strip with primitive
+restart. The port already rewrites HLSL before it reaches glslang
+(`src/rhi/shader_compiler.cpp`), so that translation belongs there. Not done
+yet.
+
 ## MILESTONE 6: the 50-second hang was RAND_MAX
 
 The demo hung for 90+ seconds and the only way out was Force Quit. It was not
