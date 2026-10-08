@@ -66,6 +66,12 @@ namespace
 std::mutex g_reflMutex;
 std::unordered_map<uint64_t, ShaderReflectionRecord> g_reflections;
 
+// Emulated vertex stage per geometry shader (see gs_emulation.h), keyed by the
+// geometry shader's SPIR-V so pipeline creation can find it from the shader the
+// engine bound.
+std::mutex g_emuMutex;
+std::unordered_map<uint64_t, std::vector<uint32_t>> g_emulatedVertexShaders;
+
 uint64_t HashBytes(const void *data, size_t size)
 {
   const uint8_t *p = (const uint8_t *)data;
@@ -78,6 +84,23 @@ uint64_t HashBytes(const void *data, size_t size)
   return h;
 }
 } // namespace
+
+void RegisterEmulatedVertexShader(const void *gsSpirv, size_t gsSize, const std::vector<uint32_t> &vsSpirv)
+{
+  if (!gsSpirv || !gsSize || vsSpirv.empty()) return;
+  std::lock_guard<std::mutex> lock(g_emuMutex);
+  g_emulatedVertexShaders[HashBytes(gsSpirv, gsSize)] = vsSpirv;
+}
+
+bool LookupEmulatedVertexShader(const void *gsSpirv, size_t gsSize, std::vector<uint32_t> *out)
+{
+  if (!gsSpirv || !gsSize || !out) return false;
+  std::lock_guard<std::mutex> lock(g_emuMutex);
+  auto it = g_emulatedVertexShaders.find(HashBytes(gsSpirv, gsSize));
+  if (it == g_emulatedVertexShaders.end()) return false;
+  *out = it->second;
+  return true;
+}
 
 void RegisterShaderReflection(const void *spirv, size_t size, const ShaderReflectionRecord &rec)
 {

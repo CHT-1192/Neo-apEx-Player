@@ -175,6 +175,8 @@ int main()
   Check(vs.find("gsemu_vid % 6u") != std::string::npos, "the emitted vertex is selected with SV_VertexID %% slots");
   Check(vs.find("gsemu_slot == gsemu_at") != std::string::npos, "each Append is turned into a slot test");
   Check(vs.find("RestartStrip") == std::string::npos, "RestartStrip is gone (the index buffer carries it)");
+  Check(vs.find("OutputStream") == std::string::npos, "the OutputStream receiver is consumed with the call");
+  Check(vs.find("return o; ++gsemu_at") != std::string::npos, "the Append argument becomes the returned vertex");
   Check(vs.find("float4( 0, 0, 0, 0 )") != std::string::npos, "unused slots collapse to a degenerate vertex");
 
   // --- the fat geometry ----------------------------------------------------

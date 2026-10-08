@@ -6,6 +6,8 @@
 // and the rest of the port treat it as such.
 #include "d3d11_internal.h"
 
+#include "rhi/gs_emulation.h"
+
 #include <D3Dcompiler.h>
 #include <D3DX11.h>
 
@@ -111,6 +113,47 @@ HRESULT CompileCommon(LPCVOID pSrcData, SIZE_T SrcDataSize, const D3D_SHADER_MAC
     if (ppErrorMsgs) *ppErrorMsgs = CreateBlobString(compiled.error);
     phxvk::LogError("D3DCompile(%s) failed: %s", debugName.c_str(), compiled.error.c_str());
     return E_FAIL;
+  }
+
+  // A geometry shader cannot run on this device, but it can be reproduced: the
+  // shape is known and the HLSL is right here, so translate and precompile the
+  // vertex stage that stands in for it.  Pipeline creation picks it up from the
+  // geometry shader's SPIR-V.
+  if (stage == phxvk::ShaderStage::Geometry && compiled.geometry.present)
+  {
+    const phxvk::GsProgram gs = phxvk::AnalyseGeometryShader(source, pEntrypoint, "v", compiled.geometry);
+    if (gs.ok)
+    {
+      const std::string extra = phxvk::TranslateGeometryShaderToVertex(source, gs, pEntrypoint, "v", "GSEMU_PACKED");
+      phxvk::CompiledShader emu;
+      if (!extra.empty())
+      {
+        const std::string combined = source + extra;
+        const std::string emuEntry = std::string(pEntrypoint) + "_emu";
+        emu = phxvk::CompileHLSL(combined.c_str(), combined.size(), emuEntry.c_str(), phxvk::ShaderStage::Vertex, "gs-emu/vs_5_0");
+        if (!emu.ok) { FILE *f = fopen("/tmp/gsemu-fail.hlsl", "w"); if (f) { fwrite(combined.data(), 1, combined.size(), f); fclose(f); } }
+      }
+      if (emu.ok)
+      {
+        RegisterEmulatedVertexShader(compiled.spirv.data(), compiled.spirv.size() * sizeof(uint32_t), emu.spirv);
+        static int logged = 0;
+        if (logged++ < 8)
+          phxvk::LogWarn("[d3d11] geometry shader emulated: %s in x%d -> %d vertices per primitive, "
+                         "%zu strip segment(s); vertex stage '%s_emu' compiled",
+                         compiled.geometry.inputPrimitive.c_str(), compiled.geometry.inputVertices,
+                         gs.slots, gs.restartsAfter.size() + (gs.restartsAfter.empty() || gs.restartsAfter.back() != gs.slots ? 1 : 0),
+                         pEntrypoint);
+      }
+      else
+      {
+        phxvk::LogWarn("[d3d11] geometry shader emulation compiled nothing (%s): %s",
+                       pEntrypoint, emu.error.empty() ? "translation produced no source" : emu.error.c_str());
+      }
+    }
+    else
+    {
+      phxvk::LogWarn("[d3d11] geometry shader not emulated (%s): %s", pEntrypoint, gs.reason.c_str());
+    }
   }
 
   ShaderReflectionRecord rec;

@@ -118,11 +118,27 @@ CallScan ScanBody(const std::string &body)
   for (size_t at = 0; (at = body.find("for", at)) != std::string::npos; at += 3)
   {
     if (at > 0 && IsIdentChar(body[at - 1])) continue;
+    if (at + 3 < body.size() && IsIdentChar(body[at + 3])) continue;
+    // The body is the brace that immediately follows the closing parenthesis;
+    // a brace-bodied loop is the only shape whose RestartStrip positions could
+    // hide a trip count.
+    size_t p = body.find('(', at);
+    if (p == std::string::npos) continue;
+    int depth = 0;
+    size_t close = std::string::npos;
+    for (size_t q = p; q < body.size(); q++)
+    {
+      if (body[q] == '(') depth++;
+      else if (body[q] == ')' && --depth == 0) { close = q; break; }
+    }
+    if (close == std::string::npos) continue;
+    size_t brace = close + 1;
+    SkipSpace(body, brace);
+    if (brace >= body.size() || body[brace] != '{') continue;
     std::string ignored;
     size_t after = 0;
-    if (!ExtractBody(body, at, ignored, nullptr, &after)) continue;
-    const size_t open = body.find('{', at);
-    loopBodies.emplace_back(open, after);
+    if (!ExtractBody(body, brace, ignored, nullptr, &after)) continue;
+    loopBodies.emplace_back(brace, after);
   }
 
   for (size_t at = 0; at < body.size();)
@@ -241,10 +257,22 @@ std::string TranslateGeometryShaderToVertex(const std::string &source, const GsP
 
   // Rewrite the body: every Append becomes "is this my slot?", every
   // RestartStrip disappears (the index buffer carries the restarts).
+  // A call is written `OutputStream.Append(...)`, so replacing only the name
+  // would leave a dangling `OutputStream.` behind -- consume the receiver too.
+  auto dropReceiver = [](std::string &out, const std::string &body, size_t at) {
+    size_t q = at;
+    while (q > 0 && (body[q - 1] == ' ' || body[q - 1] == '\t')) q--;
+    if (q == 0 || body[q - 1] != '.') return;
+    size_t r = q - 1;
+    while (r > 0 && IsIdentChar(body[r - 1])) r--;
+    const size_t prefix = at - r;
+    if (out.size() >= prefix) out.resize(out.size() - prefix);
+  };
+
   std::string translated;
   for (size_t at = 0; at < gsBody.size();)
   {
-    if (gsBody.compare(at, 6, "Append") == 0 && (at == 0 || !IsIdentChar(gsBody[at - 1])))
+    if (gsBody.compare(at, 6, "Append") == 0 && (at == 0 || !IsIdentChar(gsBody[at - 1])) && (at + 6 >= gsBody.size() || !IsIdentChar(gsBody[at + 6])))
     {
       size_t a = at + 6;
       SkipSpace(gsBody, a);
@@ -260,6 +288,7 @@ std::string TranslateGeometryShaderToVertex(const std::string &source, const GsP
         if (end < gsBody.size())
         {
           const std::string arg = gsBody.substr(a + 1, end - a - 1);
+          dropReceiver(translated, gsBody, at);
           translated += "{ if ( gsemu_slot == gsemu_at ) return " + arg + "; ++gsemu_at; }";
           at = end + 1;
           continue;
@@ -273,7 +302,13 @@ std::string TranslateGeometryShaderToVertex(const std::string &source, const GsP
       if (a < gsBody.size() && gsBody[a] == '(')
       {
         size_t end = gsBody.find(')', a);
-        if (end != std::string::npos) { translated += ";"; at = end + 1; continue; }
+        if (end != std::string::npos)
+        {
+          dropReceiver(translated, gsBody, at);
+          translated += ";";
+          at = end + 1;
+          continue;
+        }
       }
     }
     translated += gsBody[at++];
@@ -292,7 +327,6 @@ std::string TranslateGeometryShaderToVertex(const std::string &source, const GsP
   out += "  const uint gsemu_slot = gsemu_vid % " + std::to_string(gs.slots) + "u;\n";
   out += "  uint gsemu_at = 0u;\n";
   out += "  " + outType + " gsemu_out;\n";
-  out += "  (void)gsemu_out;\n";
   out += "  {\n";
   out += translated;
   out += "\n  }\n";

@@ -72,6 +72,11 @@ struct ShaderReflectionRecord
 // that CreateVertexShader()/D3DReflect() can recover it from a plain SPIR-V
 // blob (the design requires the blob payload to be raw SPIR-V).
 void RegisterShaderReflection(const void *spirv, size_t size, const ShaderReflectionRecord &rec);
+
+// The vertex stage that stands in for a geometry shader Metal cannot run,
+// keyed by that geometry shader's SPIR-V.  See src/rhi/gs_emulation.h.
+void RegisterEmulatedVertexShader(const void *gsSpirv, size_t gsSize, const std::vector<uint32_t> &vsSpirv);
+bool LookupEmulatedVertexShader(const void *gsSpirv, size_t gsSize, std::vector<uint32_t> *out);
 bool LookupShaderReflection(const void *spirv, size_t size, ShaderReflectionRecord *out);
 
 // Blobs (d3d11_blob.cpp).
