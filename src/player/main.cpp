@@ -825,11 +825,38 @@ int main(int argc, char **argv)
     uint64_t slowestRound = 0;
     int slowestRoundIndex = -1;
     int rounds = 0;
+    uint64_t lastProgressAt = startedAt;
     while (UpdateQueue.NumItems() > 0)
     {
       const uint64_t roundStart = NowSteadyMs();
       ProcessGeneratorQueue(100, &device);
       const uint64_t roundMs = NowSteadyMs() - roundStart;
+
+      // Show how far along this is instead of leaving the window a frozen black
+      // rectangle for the five seconds the demo's resources take to build.  The
+      // original does the same thing from the other side: CphxProject::DoPrecalc
+      // renders and presents a progress frame every 40 ms while it loads, so the
+      // window is never blank and never shows a half-built demo.
+      {
+        const uint64_t now = NowSteadyMs();
+        if (now - lastProgressAt >= 250)
+        {
+          lastProgressAt = now;
+          const int left = UpdateQueue.NumItems();
+          const int pct = itemsAtStart > 0 ? (int)(100.0 * (itemsAtStart - left) / itemsAtStart) : 100;
+          char title[128];
+          snprintf(title, sizeof title, "Neo-apEx-Player - generating resources %d%%", pct);
+          CString titleText(title);
+          window.SetWindowTitle(titleText);
+          SDL_PumpEvents();
+          if (phxBackBufferView && SwapChain)
+          {
+            const float col[4] = { 0.055f, 0.070f, 0.090f, 1.0f };
+            phxContext->ClearRenderTargetView(phxBackBufferView, (float *)col);
+            SwapChain->Present(0, 0);
+          }
+        }
+      }
       if (roundMs > slowestRound)
       {
         slowestRound = roundMs;
@@ -848,6 +875,12 @@ int main(int argc, char **argv)
     phxvk::LogInfo("resource generation: %d rounds, %d item(s) left, %.2f s total (slowest round %d: %.0f ms)",
                    rounds, UpdateQueue.NumItems(), (NowSteadyMs() - startedAt) / 1000.0, slowestRoundIndex,
                    (double)slowestRound);
+
+    // Drop the progress wording: from here the demo owns the title.
+    {
+      CString titleText((TCHAR *)"Neo-apEx-Player");
+      window.SetWindowTitle(titleText);
+    }
   }
 
   // ---------------------------------------------------------------------
