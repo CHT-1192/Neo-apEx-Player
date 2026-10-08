@@ -942,14 +942,50 @@ int main(int argc, char **argv)
     // events draw nothing at all and the target stays zero.
     {
       CphxTimeline_Tool *tt = Project.Timeline;
+      bool requested = false;
       for (TS32 i = 0; i < tt->Events.NumItems(); i++)
       {
         CphxEvent_Tool *e = tt->Events[i];
         if (!e->Event) continue;
         if (e->Event->StartFrame <= frame && frame < e->Event->EndFrame)
         {
-          if (!e->ContentReady()) e->RequestContent();
+          if (!e->ContentReady()) { e->RequestContent(); requested = true; }
+        }
+      }
 
+      // Finish what those requests asked for BEFORE drawing.
+      //
+      // Events activate resources that were not needed at load time, and this
+      // used to request them, draw the frame anyway and only then service the
+      // queue.  A frame presented in that window is a frame whose scene meshes,
+      // textures and shader states are half-built, which is what showed as
+      // untextured models, as black flashes, and as an intermittent glare that
+      // appeared in some runs of the same frame and not others.  The original
+      // never shows one: CphxTimeline_Tool::Render refuses to draw an event
+      // that is not ContentReady(), and during load CphxProject::DoPrecalc
+      // renders and presents progress every 40 ms instead.
+      if (requested)
+      {
+        int guard = 0;
+        while (UpdateQueue.NumItems() > 0)
+        {
+          ProcessGeneratorQueue(100, &device);
+          if (++guard > 20000)
+          {
+            phxvk::LogError("resource generation did not converge for frame %lld; %d item(s) left, head type %d",
+                            (long long)frame, UpdateQueue.NumItems(),
+                            UpdateQueue.NumItems() ? (int)UpdateQueue[0]->GetType() : -1);
+            break;
+          }
+        }
+      }
+
+      for (TS32 i = 0; i < tt->Events.NumItems(); i++)
+      {
+        CphxEvent_Tool *e = tt->Events[i];
+        if (!e->Event) continue;
+        if (e->Event->StartFrame <= frame && frame < e->Event->EndFrame)
+        {
           if (e->Type == EVENT_RENDERSCENE)
           {
             CphxEvent_RenderScene_Tool *rs = (CphxEvent_RenderScene_Tool *)e;
