@@ -1,61 +1,102 @@
 # --- apEx player vs. original video: side-by-side frame comparison -----------
 #
-#   apexcompare <frame> [--video FILE] [--apx FILE] [--out FILE] [--scale WxH]
+#   apexcompare <frame> [options]
 #
-# The apEx player renders at the project's <Framerate>, which for Clean Slate is
-# 120, and the upload is 284.501 s against the demo's 34132 frames = 284.43 s, so
-# demo frame N sits at exactly N/120 seconds in the video.  This dumps that frame
-# from both and stacks them: original on top, this port below.
+#     --video FILE   reference video        (env APEXCOMPARE_VIDEO)
+#     --apx FILE     the project to play    (env APEXCOMPARE_APX)
+#     --player FILE  the built player       (env APEXCOMPARE_PLAYER)
+#     --tmp DIR      scratch directory      (env APEXCOMPARE_TMP)
+#     --out FILE     where to write the stack  (default /tmp/apexcompare-<frame>.png)
+#     --scale WxH    output size, both halves  (default 960:540)
+#     --fps N        the project's framerate   (default 120)
+#
+# The three paths with no sensible default are variables rather than baked-in
+# ones, so this file works on somebody else's machine:
+#
+#   export APEXCOMPARE_VIDEO=~/Movies/cleanslate.webm
+#   export APEXCOMPARE_APX=~/apEx-public/Projects/Clean\ Slate/cleanslate.apx
+#   export APEXCOMPARE_PLAYER=~/Neo-apEx-Player/build/neo_apex_player
+#
+# The player renders at the project's <Framerate>.  For Clean Slate that is 120,
+# and the upload is 284.501 s against the demo's 34132 frames = 284.43 s, so demo
+# frame N sits at exactly N/120 seconds in the video.  This dumps that frame from
+# both and stacks them: ORIGINAL on top, PORT below.
 apexcompare() {
-  local frame="" video="$HOME/Movies/Clean Slate [O3T1-nadehU].webm"
-  local apx="$HOME/Repos/apEx-public/Projects/Clean Slate/cleanslate.apx"
-  local player="$HOME/Projects/Neo-apEx-Player/build/neo_apex_player"
+  local frame=""
+  local video="${APEXCOMPARE_VIDEO:-$HOME/Movies/Clean Slate [O3T1-nadehU].webm}"
+  local apx="${APEXCOMPARE_APX:-$HOME/Repos/apEx-public/Projects/Clean Slate/cleanslate.apx}"
+  local player="${APEXCOMPARE_PLAYER:-$HOME/Projects/Neo-apEx-Player/build/neo_apex_player}"
+  local tmp="${APEXCOMPARE_TMP:-/tmp}"
   local fps=120 scale="960:540" out=""
   while [ $# -gt 0 ]; do
     case "$1" in
-      --video) video="$2"; shift 2 ;;
-      --apx)   apx="$2";   shift 2 ;;
-      --out)   out="$2";   shift 2 ;;
-      --scale) scale="$2"; shift 2 ;;
-      --fps)   fps="$2";   shift 2 ;;
-      -h|--help) sed -n '2,9p' "$HOME/.dshrc"; return 0 ;;
+      --video)  video="$2";  shift 2 ;;
+      --apx)    apx="$2";    shift 2 ;;
+      --player) player="$2"; shift 2 ;;
+      --tmp)    tmp="$2";    shift 2 ;;
+      --out)    out="$2";    shift 2 ;;
+      --scale)  scale="$2";  shift 2 ;;
+      --fps)    fps="$2";    shift 2 ;;
+      -h|--help)
+        sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+        return 0 ;;
       *) frame="$1"; shift ;;
     esac
   done
   if [ -z "$frame" ]; then
-    echo "usage: apexcompare <frame> [--video FILE] [--apx FILE] [--out FILE] [--scale WxH]" >&2
+    echo "usage: apexcompare <frame> [--video FILE] [--apx FILE] [--player FILE]" >&2
+    echo "                            [--tmp DIR] [--out FILE] [--scale WxH] [--fps N]" >&2
     return 2
   fi
   [ -f "$video" ]  || { echo "apexcompare: no video at $video" >&2; return 1; }
   [ -f "$apx" ]    || { echo "apexcompare: no project at $apx" >&2; return 1; }
   [ -x "$player" ] || { echo "apexcompare: build the player first ($player)" >&2; return 1; }
+  [ -d "$tmp" ]    || { echo "apexcompare: no scratch directory at $tmp" >&2; return 1; }
 
   local t ref port
   t=$(awk -v f="$frame" -v r="$fps" 'BEGIN{printf "%.4f", f/r}')
-  [ -n "$out" ] || out="/tmp/apexcompare-${frame}.png"
-  ref="/tmp/apexcompare-ref-${frame}.png"
-  port="/tmp/apexcompare-port-${frame}.ppm"
+  [ -n "$out" ] || out="$tmp/apexcompare-${frame}.png"
+  ref="$tmp/apexcompare-ref-${frame}.png"
+  port="$tmp/apexcompare-port-${frame}.ppm"
 
   echo "apexcompare: frame $frame = ${t}s"
 
-  # -ss before -i makes ffmpeg seek rather than decode from the start of a 4K
-  # source; for a still that is exact enough and enormously faster.
+  # -ss before -i makes ffmpeg seek instead of decoding a 4K source from zero;
+  # exact enough for one still and enormously faster.
   ffmpeg -v error -ss "$t" -i "$video" -frames:v 1 -vf "scale=$scale" -y "$ref" || return 1
 
-  # --start-frame puts the clock straight at the requested demo frame and
-  # --frames 1 renders exactly one present, which the dump matches on.
-  # --no-ui: the setup dialog is modal and belongs to a human.
-  "$player" "$apx" --no-ui --no-audio --no-vsync --start-frame "$frame" --frames 1 \
-      --dump-frame 0="$port" >/dev/null 2>&1
+  # --fixed-fps advances exactly one demo frame per present, which makes the
+  # mapping exact: present k renders demo frame (start + k).  It also needs a
+  # warm-up, because the scene's GPU resources are built lazily over roughly the
+  # first 30 presents (frame 0 of a cold start is genuinely blank), so start a
+  # little early and dump on the present that lands on the requested frame.
+  # --no-ui because the setup dialog is modal and belongs to a human: leaving it
+  # up would make this script wait forever for a click.
+  local warm=30 start
+  start=$((frame - warm))
+  if [ "$start" -lt 0 ]; then start=0; warm=$frame; fi
+  "$player" "$apx" --no-ui --no-audio --no-vsync --fixed-fps \
+      --start-frame "$start" --frames $((warm + 1)) \
+      --dump-frame "$warm"="$port" >/dev/null 2>&1
   [ -f "$port" ] || { echo "apexcompare: the player produced no frame" >&2; return 1; }
 
-  # Label both halves, then stack original-over-port.
+  # Stacked ORIGINAL (top) over PORT (bottom).  Some ffmpeg builds have no
+  # drawtext filter, so try the labelled version and fall back to a plain stack
+  # rather than failing.
   ffmpeg -v error -i "$ref" -i "$port" -filter_complex \
     "[0:v]scale=$scale,drawtext=text='ORIGINAL  video @ ${t}s':x=8:y=8:fontsize=20:fontcolor=white:box=1:boxcolor=black@0.6[a];\
      [1:v]scale=$scale,drawtext=text='PORT  demo frame ${frame}':x=8:y=8:fontsize=20:fontcolor=white:box=1:boxcolor=black@0.6[b];\
-     [a][b]vstack=inputs=2" -frames:v 1 -y "$out" || return 1
+     [a][b]vstack=inputs=2" -frames:v 1 -y "$out" 2>/dev/null \
+  || ffmpeg -v error -i "$ref" -i "$port" -filter_complex \
+       "[0:v]scale=$scale[a];[1:v]scale=$scale[b];[a][b]vstack=inputs=2" \
+       -frames:v 1 -y "$out" || return 1
 
-  rm -f "$ref" "$port"
+  # The player also writes the timeline's own composite target next to the dump
+  # (<path>.target.ppm); it is not part of the comparison.
+  rm -f "$ref" "$port" "$port.target.ppm"
   echo "apexcompare: wrote $out"
-  echo "$out"
 }
+
+# This is the standalone copy of the function above - the file to copy to
+# ~/.dshrc (or `source`) if you want apexcompare in every shell.  It is kept
+# byte-identical to the repository's ./.dshrc on purpose; edit that one.
