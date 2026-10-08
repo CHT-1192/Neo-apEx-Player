@@ -397,7 +397,7 @@ cmake --build build -j8
 ./build/phx_shadertool --entry p --stage frag <shader>.hlsl   # shader/reflection check
 ```
 
-Optional but useful: `VK_LAYER_PATH=/opt/homebrew/opt/vulkan-validationlayers/share/vulkan/explicit_layer.d`
+Optional but useful: `VK_LAYER_PATH="$(brew --prefix)/opt/vulkan-validationlayers/share/vulkan/explicit_layer.d"`
 
 ## Known risks
 
