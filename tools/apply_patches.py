@@ -138,6 +138,19 @@ private:""",
     ),
     (
         "Phoenix/Project.cpp",
+        """  datastreams = (unsigned char**)DATA;
+  for ( int x = 0; x < StreamCount; x++ )
+    datastreams[ x ] += (int)DATA;""",
+        """  datastreams = datastreamPointers;
+  for ( int x = 0; x < StreamCount; x++ )
+    datastreams[ x ] = DATA + ( (unsigned int*)DATA )[ x ];""",
+        "the original converts the file's stream offsets into pointers in place, "
+        "which needs a 32-bit pointer: (int)DATA truncates on a 64-bit build, so "
+        "every stream starts in unmapped memory.  The binary loader only became "
+        "reachable once the port loaded the loading-screen project.",
+    ),
+    (
+        "Phoenix/Project.cpp",
         '#include "..\\LibCTiny\\libcminimal.h"',
         '#include "../LibCTiny/libcminimal.h"',
         "backslash include separators are a hard error outside MSVC.",

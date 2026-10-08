@@ -39,6 +39,13 @@ extern CArray<CphxResource *> UpdateQueue;
 #include "RenderTarget.h"  // CphxRenderTarget
 #include "rhi/vk_core.h"
 #include "ui.h"                            // the setup dialog, in its own window
+#include "Project.h"                       // CphxProject: the loading-screen project
+
+// The engine's binary project loader reads its screen size, fullscreen state and
+// hardware aspect from here (Phoenix/Project.cpp:286-291).  MinimalPlayer
+// declares it in SetupDialog.h and fills it from the dialog; the port fills it
+// from the same answers.
+SETUPCFG setupcfg;
 #include "platform/phx_monitor_aspect.h"   // its "Monitor Aspect" answer, for the engine
 #include "XMLDocument.h"                   // the .apx's <Group>/<Title>, for the dialog
 
@@ -382,6 +389,19 @@ int main(int argc, char **argv)
     PhxSetMonitorAspect(0, 0);
   }
 
+  {
+    int ax = 0, ay = 0;
+    PhxMonitorAspect(&ax, &ay);
+    setupcfg.ReleaseName = (char *)"";
+    setupcfg.GroupName = (char *)"";
+    setupcfg.fullscreen = winFullscreen ? 1 : 0;
+    setupcfg.vsync = winVsync ? 1 : 0;
+    setupcfg.mode.dmPelsWidth = winW;
+    setupcfg.mode.dmPelsHeight = winH;
+    setupcfg.HardwareAspectRatio = (ax > 0 && ay > 0) ? (float)ax / (float)ay
+                                                      : (winH > 0 ? (float)winW / (float)winH : 16.0f / 9.0f);
+  }
+
   // ---------------------------------------------------------------------
   // window + device
   //
@@ -511,6 +531,61 @@ int main(int argc, char **argv)
       return 1;
     }
     phxvk::LogInfo("back buffer view: %p", (void *)phxBackBufferView);
+  }
+
+  // ---------------------------------------------------------------------
+  // Load the loading screen.
+  //
+  // The original never shows the demo while it prepares itself.  MinimalPlayer
+  // loads a tiny separate project first -- MinimalPlayer.cpp:263-266, with
+  // `precalcminimal.64k` for a CNS demo such as this one (Data/asm.bat and
+  // apExRoot.cpp:1768-1775 pick it from the project's <minimalprecalc> and
+  // <farbrauschprecalc> flags, which cleanslate.apx sets to 1 and 0) -- and
+  // then renders THAT every 40 ms from CphxProject::DoPrecalc() with a position
+  // that advances as the real project loads.  The progress bar is simply frame
+  // 0..1000 of that project.
+  //
+  // It has to be loaded here, before the demo's render targets exist: the two
+  // projects share the engine's globals (phxDepthBufferView in particular, which
+  // LoadProject's CreateDepthBuffer() sets), and the original has the precalc's
+  // in place while the precalc is being drawn.
+  static CphxProject PrecalcProject;
+  ID3D11DepthStencilView *precalcDepthView = nullptr;
+  bool havePrecalc = false;
+  {
+    std::string precalcPath = opt.project;
+    const size_t slash = precalcPath.find_last_of("/\\");
+    precalcPath = (slash == std::string::npos ? std::string() : precalcPath.substr(0, slash + 1)) + "precalcminimal.64k";
+
+    FILE *f = fopen(precalcPath.c_str(), "rb");
+    if (f)
+    {
+      std::vector<unsigned char> blob;
+      unsigned char chunk[4096];
+      size_t n = 0;
+      while ((n = fread(chunk, 1, sizeof chunk, f)) > 0) blob.insert(blob.end(), chunk, chunk + n);
+      fclose(f);
+      // The build embeds the file after a 7-byte header and MinimalPlayer
+      // passes `precalc + 7`; the file on disk carries the same 7 bytes.
+      if (blob.size() > 7)
+      {
+        PrecalcProject.LoadProject(blob.data() + 7, nullptr, setupcfg);
+        precalcDepthView = phxDepthBufferView;
+        // Target is assigned while rendering (Timeline.cpp sets it to the last
+        // active event's target), so at load time the question is whether the
+        // events have targets at all.
+        int targetted = 0;
+        for (int e = 0; e < (int)PrecalcProject.Timeline.EventCount; e++)
+          if (PrecalcProject.Timeline.Events[e] && PrecalcProject.Timeline.Events[e]->Target) targetted++;
+        havePrecalc = targetted > 0;
+        phxvk::LogInfo("loading screen: %s (%zu bytes) loaded, %d event(s), %d with a target%s", precalcPath.c_str(),
+                       blob.size(), (int)PrecalcProject.Timeline.EventCount, targetted,
+                       havePrecalc ? "" : " (nothing to blit, so it is not used)");
+      }
+    }
+    if (!havePrecalc)
+      phxvk::LogWarn("loading screen: %s not usable; the demo's resources will build with a plain window",
+                     precalcPath.c_str());
   }
 
   // ---------------------------------------------------------------------
@@ -826,6 +901,7 @@ int main(int argc, char **argv)
     int slowestRoundIndex = -1;
     int rounds = 0;
     uint64_t lastProgressAt = startedAt;
+    int precalcFrames = 0;
     while (UpdateQueue.NumItems() > 0)
     {
       const uint64_t roundStart = NowSteadyMs();
@@ -839,11 +915,33 @@ int main(int argc, char **argv)
       // window is never blank and never shows a half-built demo.
       {
         const uint64_t now = NowSteadyMs();
-        if (now - lastProgressAt >= 250)
+        const int left = UpdateQueue.NumItems();
+        const float pos = itemsAtStart > 0 ? (float)(itemsAtStart - left) / (float)itemsAtStart : 1.0f;
+
+        if (havePrecalc)
         {
+          // CphxProject::DoPrecalc()'s cadence, verbatim: render the loading
+          // project at a position that advances with the load, present it, and
+          // pump.  Its depth buffer is the one the engine's globals still point
+          // at while the precalc renders (see where it was loaded).
+          if (now - lastProgressAt >= 40)
+          {
+            lastProgressAt = now;
+            ID3D11DepthStencilView *demoDepthView = phxDepthBufferView;
+            phxDepthBufferView = precalcDepthView;
+            PrecalcProject.Timeline.Render(pos * 1000.0f, false, false);
+            precalcFrames++;
+            phxDepthBufferView = demoDepthView;
+            if (SwapChain) SwapChain->Present(0, 0);
+            SDL_PumpEvents();
+          }
+        }
+        else if (now - lastProgressAt >= 250)
+        {
+          // Without the loading project all that can be shown is that the
+          // process is alive.
           lastProgressAt = now;
-          const int left = UpdateQueue.NumItems();
-          const int pct = itemsAtStart > 0 ? (int)(100.0 * (itemsAtStart - left) / itemsAtStart) : 100;
+          const int pct = (int)(pos * 100.0f);
           char title[128];
           snprintf(title, sizeof title, "Neo-apEx-Player - generating resources %d%%", pct);
           CString titleText(title);
@@ -881,6 +979,10 @@ int main(int argc, char **argv)
       CString titleText((TCHAR *)"Neo-apEx-Player");
       window.SetWindowTitle(titleText);
     }
+
+    if (havePrecalc)
+      phxvk::LogInfo("loading screen: drawn at %d positions (%.1f s of generation)", precalcFrames,
+                     (NowSteadyMs() - startedAt) / 1000.0);
   }
 
   // ---------------------------------------------------------------------

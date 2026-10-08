@@ -237,6 +237,18 @@ static void CreateDepthBuffer( int XRes, int YRes )
 
 static unsigned char **datastreams;
 
+// [port] The stream table is built here rather than by rewriting the first
+// StreamCount dwords of the file in place.  The original did
+//
+//   datastreams = (unsigned char**)DATA;
+//   for ( x ) datastreams[ x ] += (int)DATA;
+//
+// which converts each stored offset into a pointer *inside the buffer*.  That
+// only works where a pointer is 32 bits: on a 64-bit build `(int)DATA` drops the
+// top half of the address and every stream starts in unmapped memory.  Keeping
+// the table separate leaves the caller's buffer untouched and is exact on both.
+static unsigned char *datastreamPointers[ StreamCount ];
+
 static const unsigned char readbyte( const PHXDATASTREAMS Stream ) { return datastreams[ Stream ]++[ 0 ]; }
 static const unsigned int readdword( const PHXDATASTREAMS Stream ) { unsigned int s = ( (unsigned int*)datastreams[ Stream ] )[ 0 ]; datastreams[ Stream ] += 4; return s; }
 #ifdef PHX_MESH_LOADSTOREDMESH
@@ -269,9 +281,9 @@ void CphxProject::LoadProject( unsigned char *DATA, CphxProject *PrecalcProject,
   int Count;
 
   // stream setup
-  datastreams = (unsigned char**)DATA;
+  datastreams = datastreamPointers;
   for ( int x = 0; x < StreamCount; x++ )
-    datastreams[ x ] += (int)DATA;
+    datastreams[ x ] = DATA + ( (unsigned int*)DATA )[ x ];
 
   //////////////////////////////////////////////////////////////////////////
   // aspect ratio and framerate info, needed for rendertargets

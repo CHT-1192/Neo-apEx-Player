@@ -57,6 +57,55 @@ behind both APIs.
 * Mesh text generation uses Windows GDI glyph outlines + the GLU tessellator;
   macOS provides GLU via the OpenGL framework (verified to build and run).
 
+## MILESTONE 8: the loading screen, and frames drawn before they were ready
+
+Two things the port got wrong about starting up, both reported from watching it
+run rather than from a diff.
+
+**Frames were drawn before their resources existed.** The frame loop asked for
+whatever an active event was missing, drew the frame anyway, and only then
+serviced the generator queue:
+
+```cpp
+if (!e->ContentReady()) e->RequestContent();       // request it
+Project.Timeline->Timeline->Render(frame, ...);    // ...and draw regardless
+ProcessGeneratorQueue(20, &device);                // generate afterwards
+```
+
+A frame presented in that window has half-built scene meshes, textures and
+shader states, which is what showed as untextured models, as black flashes, and
+as a glare that appeared in some runs of the same frame and not others: the same
+0:31 frame measured 3.2 against the reference video on one run and 20.9 on the
+next. The original cannot show such a frame -- `CphxTimeline_Tool::Render`
+refuses to draw an event that is not `ContentReady()`. The requests are now
+collected first and the queue is drained to empty before the draw, which takes
+`generator` out of the slow-frame reports entirely and makes the frame
+reproducible (3.228 on every run).
+
+**There was no loading screen.** The original's progress display is not UI: it
+is a separate, tiny binary project. `MinimalPlayer.cpp:263-266` loads
+`precalcminimal.64k` -- chosen for a CNS demo by `apExRoot.cpp:1768-1775` from
+the project's `<minimalprecalc>1</minimalprecalc>` and
+`<farbrauschprecalc>0</farbrauschprecalc>`, which is what cleanslate.apx says --
+and then renders *that* every 40 ms from `CphxProject::DoPrecalc()` at a
+position that advances with the load. The progress bar is frame 0..1000 of that
+project. The port now does the same, including the part that is easy to miss:
+the two projects share the engine's globals, so the precalc's
+`phxDepthBufferView` is saved and put back around each loading frame.
+
+Using the binary loader meant fixing it for a 64-bit build, which nothing had
+needed to do before. Its stream table was built by rewriting the file's first
+`StreamCount` dwords into pointers in place --
+
+```cpp
+datastreams = (unsigned char**)DATA;
+for ( x ) datastreams[ x ] += (int)DATA;    // (int) drops the top half
+```
+
+-- which is exact when a pointer is 32 bits and lands every stream in unmapped
+memory when it is not. The table is now built separately, leaving the buffer
+untouched. This is in `tools/apply_patches.py` with the rest of the patches.
+
 ## MILESTONE 7: the geometry shader stage is not optional
 
 The background grid in Clean Slate (visible at 0:31, 0:33, 0:39, and behind the

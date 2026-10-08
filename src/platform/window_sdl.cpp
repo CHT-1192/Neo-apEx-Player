@@ -637,6 +637,28 @@ TBOOL CCoreWindowHandlerWin::HandleMessages()
   return HandleOSMessages();
 }
 
+// ---------------------------------------------------------------------------
+// PeekMessage / DispatchMessage
+//
+// The engine's CphxProject::DoPrecalc() (Phoenix/Project.cpp:170) pumps Win32
+// messages while it presents a loading frame, so the symbols are referenced as
+// soon as anything calls CphxProject::LoadProject().  The port's own loop owns
+// event dispatch -- CCoreWindowHandlerWin::HandleOSMessages() below is the one
+// consumer, and it routes events to the engine *and* to the UI hook -- so these
+// only pull pending events into SDL's queue and report that there is nothing
+// for the engine to dispatch.  Handing out a second copy of the same events
+// would deliver every key press twice.
+BOOL PeekMessageA( LPMSG, HWND, UINT, UINT, UINT )
+{
+  SDL_PumpEvents();
+  return FALSE;
+}
+
+LRESULT DispatchMessageA( const MSG * )
+{
+  return 0;
+}
+
 TBOOL CCoreWindowHandlerWin::HandleOSMessages()
 {
   SDL_Window *window = PhxWindowFromHandle(hWnd);
