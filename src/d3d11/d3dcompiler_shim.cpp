@@ -166,7 +166,7 @@ HRESULT CompileCommon(LPCVOID pSrcData, SIZE_T SrcDataSize, const D3D_SHADER_MAC
         RegisterEmulatedGeometryShader(compiled.spirv.data(), compiled.spirv.size() * sizeof(uint32_t), entry);
         static int logged = 0;
         if (logged++ < 8)
-          phxvk::LogWarn("[d3d11] geometry shader emulated: %s in x%d -> %d vertices per primitive, "
+          phxvk::LogInfo("[d3d11] geometry shader emulated: %s in x%d -> %d vertices per primitive, "
                          "%zu strip segment(s); vertex stage '%s_emu' compiled",
                          compiled.geometry.inputPrimitive.c_str(), compiled.geometry.inputVertices,
                          gs.slots, gs.restartsAfter.size() + (gs.restartsAfter.empty() || gs.restartsAfter.back() != gs.slots ? 1 : 0),

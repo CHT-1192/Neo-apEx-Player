@@ -2043,7 +2043,7 @@ bool ContextImpl::DrawInternal(bool indexed, UINT count, UINT instanceCount, UIN
 
     static int logged = 0;
     if (logged++ < 4)
-      phxvk::LogWarn("[d3d11] geometry shader emulated at draw: %u -> %u vertices, %u indices (%s in x%d)",
+      phxvk::LogInfo("[d3d11] geometry shader emulated at draw: %u -> %u vertices, %u indices (%s in x%d)",
                      count, fat.vertexCount, emuIndexCount, emulationPlan->program.inputVertices == 2 ? "line" : "prim",
                      emulationPlan->program.inputVertices);
   }

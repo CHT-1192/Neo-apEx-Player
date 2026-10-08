@@ -98,7 +98,7 @@ bool BuildShaderCommon(const void *bytecode, SIZE_T length, phxvk::ShaderStage s
              rec.geometry.appends, rec.geometry.restarts);
     static std::set<std::string> seen;
     if (seen.size() < 8 && seen.insert(shape).second)
-      phxvk::LogWarn("[d3d11] geometry shader shape to emulate: %s in -> up to %d vertices, %s<%s>, "
+      phxvk::LogInfo("[d3d11] geometry shader shape to emulate: %s in -> up to %d vertices, %s<%s>, "
                      "%d Append / %d RestartStrip.",
                      rec.geometry.inputPrimitive.empty() ? "?" : rec.geometry.inputPrimitive.c_str(),
                      rec.geometry.maxVertexCount,
@@ -108,11 +108,10 @@ bool BuildShaderCommon(const void *bytecode, SIZE_T length, phxvk::ShaderStage s
   }
 
   if (geometryRequested && phxvk::Vk().features.geometryShader == VK_FALSE && OnceGsUnsupported()())
-    phxvk::LogWarn("[d3d11] VkPhysicalDeviceFeatures::geometryShader is false (MoltenVK/Metal). Geometry "
-                   "shaders compile but their stage is dropped at pipeline creation, so every primitive a "
-                   "GS would have built is missing. This is not a no-op: Clean Slate builds particles, point "
-                   "sprites, the wireframe grid and the double-sided triangle pass in geometry shaders. See "
-                   "the message at pipeline creation and docs/STATUS.md.");
+    phxvk::LogWarn("[d3d11] this device has no geometry shader stage (MoltenVK/Metal). Geometry shaders are "
+                   "emulated in a vertex shader where their shape allows it (src/rhi/gs_emulation.h); one "
+                   "that cannot be reproduced is dropped at pipeline creation, and only that case warns "
+                   "'stage DROPPED'. See docs/STATUS.md MILESTONE 7.");
 
   return true;
 }
