@@ -1,0 +1,31 @@
+# Build trees
+build/
+build-*/
+cmake-build-*/
+
+# Scratch: probe programs, one-off logs, SPIR-V experiments
+work/
+
+# Build output that sometimes lands outside the build tree
+*.o
+*.a
+*.spv
+*.ppm
+*.dSYM/
+
+# macOS
+.DS_Store
+
+# Demo content.
+#
+# Clean Slate ships in the apEx release under CC BY-NC 4.0 (LICENSE.txt covers
+# both the code and Projects/).  That licence restricts COMMERCIAL use, not
+# redistribution, so the project file and its music data are committed here on
+# purpose: it is the only way CI can load a real .apx and run the real MVX
+# synthesiser end to end, and it keeps the tests honest.  Attribution is in
+# README.md; this repository is non-commercial.
+#
+# Anything you generate from it stays out of git:
+SoundCache/
+*.apxsndcache
+*-music.wav

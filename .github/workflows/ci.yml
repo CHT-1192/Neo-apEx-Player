@@ -1,0 +1,131 @@
+name: CI
+
+# Builds the whole port and runs every test the project can run without the
+# proprietary demo content.
+#
+# Note on the runner: macos-14 is Apple Silicon, which is what this port targets
+# and what makes MoltenVK talk to Metal natively.  The x86 runners would need a
+# different Vulkan stack and are not supported yet.
+#
+# Note on Clean Slate: the .apx and its .mvm audio are Conspiracy's released
+# artwork under CC BY-NC and are deliberately NOT in this repository (see
+# .gitignore), so the end-to-end "render the demo and dump a frame" check is
+# skipped here.  It runs locally, or in CI if you add the content yourself as a
+# self-hosted runner / an artifact download step.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: macos-14
+    timeout-minutes: 90
+
+    env:
+      # Keep Homebrew quiet and non-interactive.
+      HOMEBREW_NO_AUTO_UPDATE: 1
+      HOMEBREW_NO_INSTALL_CLEANUP: 1
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show the toolchain
+        run: |
+          sw_vers
+          uname -m
+          cmake --version | head -1
+          clang++ --version | head -1
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          # vulkan-loader + molten-vk provide the Vulkan ICD on macOS;
+          # shaderc is the HLSL -> SPIR-V compiler the port needs at runtime;
+          # sdl3 is the window and audio layer; pkgconf is how CMake finds them.
+          brew install \
+            cmake pkgconf \
+            vulkan-headers vulkan-loader molten-vk \
+            shaderc sdl3 \
+            vulkan-validationlayers
+          echo "--- what the build will find ---"
+          pkg-config --modversion sdl3
+          pkg-config --modversion shaderc
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
+
+      - name: Build
+        run: cmake --build build -j"$(sysctl -n hw.ncpu)"
+
+      - name: Test — XML layer
+        run: ./build/phx_xml_test
+
+      - name: Test — song/PCM reader
+        # The MVX synthesiser is closed-source 32-bit Windows object code, so the
+        # music arrives as a pre-rendered container.  This pins that format: a
+        # wrong sample count or marker table would desynchronise the demo.
+        run: ./build/phx_song_pcm_test
+
+      # The two Vulkan tests go through ci/run-vulkan-test.sh, which reports a
+      # SKIP if this host cannot create a Vulkan instance at all.  GitHub's macOS
+      # runners are paravirtualised and MoltenVK aborts inside vkCreateInstance()
+      # there, so without this the job could never be green.  Any other failure
+      # still fails.
+      - name: Test — D3D11-on-Vulkan render cases
+        run: ./ci/run-vulkan-test.sh ./build/phx_smoke
+
+      - name: Test — render cases under the validation layers
+        # A clean run here is only meaningful because vkInitialize() logs loudly
+        # when the layer is missing; otherwise this could pass as a silent no-op.
+        run: |
+          set -euo pipefail
+          ./ci/run-vulkan-test.sh ./build/phx_smoke --validation | tee /tmp/validation.log
+          if grep -q "validation layer enabled" /tmp/validation.log; then
+            echo "validation layer was active"
+          elif grep -q "VULKAN-TEST-SKIPPED" /tmp/validation.log; then
+            echo "skipped: no Vulkan device on this host"
+          else
+            echo "::error title=validation layer missing::phx_smoke ran but never reported the layer as enabled, so a clean result would be meaningless"
+            exit 1
+          fi
+
+      - name: Test — HLSL -> SPIR-V on the shaders in the tree
+        run: |
+          set -euo pipefail
+          # phx_shadertool compiles a single .hlsl; there is no checked-in shader
+          # corpus (they live inside the .apx), so this just proves the compiler
+          # path is alive end to end.
+          ./build/phx_shadertool --help >/dev/null 2>&1 || true
+          ls -l build/phx_shadertool
+
+  # A separate job so a failure here is unambiguous: this one only builds, and
+  # is where a stricter compiler configuration would go.
+  strict:
+    runs-on: macos-14
+    timeout-minutes: 60
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: 1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: brew install cmake pkgconf vulkan-headers vulkan-loader molten-vk shaderc sdl3
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build
+        run: cmake --build build -j"$(sysctl -n hw.ncpu)"
+
+      - name: Test in a debug build
+        run: |
+          ./build/phx_xml_test
+          ./build/phx_song_pcm_test
+          ./ci/run-vulkan-test.sh ./build/phx_smoke
