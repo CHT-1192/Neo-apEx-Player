@@ -40,6 +40,7 @@ extern CArray<CphxResource *> UpdateQueue;
 #include "rhi/vk_core.h"
 #include "ui.h"                            // the setup dialog, in its own window
 #include "Project.h"                       // CphxProject: the loading-screen project
+#include "precalc_blobs.h"                // the embedded loading-screen projects
 #include "platform/phx_monitor_aspect.h"   // its "Monitor Aspect" answer, for the engine
 #include "XMLDocument.h"                   // the .apx's <Group>/<Title>, for the dialog
 
@@ -309,6 +310,48 @@ static void ReadProjectStrings(const std::string &path, phxplayer::SetupInfo *in
   if (root.GetChildCount((TCHAR *)"Title")) info->title = root.GetChild((TCHAR *)"Title").GetText().GetPointer();
   if (root.GetChildCount((TCHAR *)"Group")) info->group = root.GetChild((TCHAR *)"Group").GetText().GetPointer();
 }
+// Which of the embedded loading-screen projects this one gets.  apExRoot.cpp's
+// release build makes the same choice from the same two flags:
+//
+//   farbrauschprecalc   -> precalcfarbrausch
+//   minimalprecalc      -> precalcminimal
+//   neither             -> precalcphoenix_shader
+//   and precalcapex wins for anything that is not a demo build
+//
+// Clean Slate carries <minimalprecalc>1</minimalprecalc> and
+// <farbrauschprecalc>0</farbrauschprecalc>, so it gets precalcminimal.
+static const PrecalcBlob *PickPrecalcBlob(const std::string &path)
+{
+  const PrecalcBlob *minimal = nullptr, *farbrausch = nullptr, *phoenix = nullptr, *apex = nullptr;
+  for (int i = 0; i < kPrecalcBlobCount; i++)
+  {
+    const char *n = kPrecalcBlobs[i].name;
+    if (!strcmp(n, "precalcminimal.64k")) minimal = &kPrecalcBlobs[i];
+    else if (!strcmp(n, "precalcfarbrausch.64k")) farbrausch = &kPrecalcBlobs[i];
+    else if (!strcmp(n, "precalcphoenix_shader.64k")) phoenix = &kPrecalcBlobs[i];
+    else if (!strcmp(n, "precalcapex.64k")) apex = &kPrecalcBlobs[i];
+  }
+
+  bool useMinimal = false, useFarbrausch = false;
+  CXMLDocument doc;
+  if (doc.LoadFromFile((TCHAR *)path.c_str()))
+  {
+    CXMLNode root = doc.GetDocumentNode().GetChild((TCHAR *)"apExProject");
+    if (root.IsValid())
+    {
+      TS32 v = 0;
+      if (root.GetChildCount((TCHAR *)"minimalprecalc") && root.GetChild((TCHAR *)"minimalprecalc").GetValue(v))
+        useMinimal = v != 0;
+      if (root.GetChildCount((TCHAR *)"farbrauschprecalc") && root.GetChild((TCHAR *)"farbrauschprecalc").GetValue(v))
+        useFarbrausch = v != 0;
+    }
+  }
+  (void)apex;
+
+  if (useFarbrausch && farbrausch) return farbrausch;
+  if (useMinimal && minimal) return minimal;
+  return phoenix ? phoenix : minimal;
+}
 
 // The engine's binary project loader reads its screen size, fullscreen state and
 // hardware aspect from here (Phoenix/Project.cpp:286-291).  MinimalPlayer
@@ -554,22 +597,16 @@ int main(int argc, char **argv)
   ID3D11DepthStencilView *precalcDepthView = nullptr;
   bool havePrecalc = false;
   {
-    std::string precalcPath = opt.project;
-    const size_t slash = precalcPath.find_last_of("/\\");
-    precalcPath = (slash == std::string::npos ? std::string() : precalcPath.substr(0, slash + 1)) + "precalcminimal.64k";
-
-    FILE *f = fopen(precalcPath.c_str(), "rb");
-    if (f)
+    // Embedded, not looked up next to the .apx: the loading screen belongs to
+    // the player, and a copy beside the project is missing the moment the same
+    // demo is run from somewhere else.  MinimalPlayer embeds it too.
+    const PrecalcBlob *precalcBlob = PickPrecalcBlob(opt.project);
+    if (precalcBlob && precalcBlob->size > 7)
     {
-      std::vector<unsigned char> blob;
-      unsigned char chunk[4096];
-      size_t n = 0;
-      while ((n = fread(chunk, 1, sizeof chunk, f)) > 0) blob.insert(blob.end(), chunk, chunk + n);
-      fclose(f);
-      // The build embeds the file after a 7-byte header and MinimalPlayer
-      // passes `precalc + 7`; the file on disk carries the same 7 bytes.
-      if (blob.size() > 7)
       {
+        // The build embeds the file after a 7-byte header and MinimalPlayer
+        // passes `precalc + 7`; the embedded copy carries the same 7 bytes.
+        std::vector<unsigned char> blob(precalcBlob->data, precalcBlob->data + precalcBlob->size);
         PrecalcProject.LoadProject(blob.data() + 7, nullptr, setupcfg);
         precalcDepthView = phxDepthBufferView;
         // Target is assigned while rendering (Timeline.cpp sets it to the last
@@ -579,14 +616,13 @@ int main(int argc, char **argv)
         for (int e = 0; e < (int)PrecalcProject.Timeline.EventCount; e++)
           if (PrecalcProject.Timeline.Events[e] && PrecalcProject.Timeline.Events[e]->Target) targetted++;
         havePrecalc = targetted > 0;
-        phxvk::LogInfo("loading screen: %s (%zu bytes) loaded, %d event(s), %d with a target%s", precalcPath.c_str(),
-                       blob.size(), (int)PrecalcProject.Timeline.EventCount, targetted,
+        phxvk::LogInfo("loading screen: %s (%d bytes, embedded) loaded, %d event(s), %d with a target%s",
+                       precalcBlob->name, precalcBlob->size, (int)PrecalcProject.Timeline.EventCount, targetted,
                        havePrecalc ? "" : " (nothing to blit, so it is not used)");
       }
     }
     if (!havePrecalc)
-      phxvk::LogWarn("loading screen: %s not usable; the demo's resources will build with a plain window",
-                     precalcPath.c_str());
+      phxvk::LogWarn("loading screen: no usable embedded project; the demo's resources will build with a plain window");
   }
 
   // ---------------------------------------------------------------------
