@@ -247,7 +247,8 @@ bool ReadStageVaryings(const uint32_t *words, size_t wordCount, ShaderStage stag
 }
 
 NormaliseResult NormaliseVaryings(const std::vector<uint32_t> &spirv, ShaderStage stage,
-                                  std::vector<uint32_t> *out, std::string *why)
+                                  std::vector<uint32_t> *out, std::string *why,
+                                  uint32_t componentBudget)
 {
   Module m;
   if (!m.Parse(spirv.data(), spirv.size()))
@@ -262,6 +263,28 @@ NormaliseResult NormaliseVaryings(const std::vector<uint32_t> &spirv, ShaderStag
   bool anyNarrow = false;
   for (const Varying &v : varyings)
     if (v.pointee.rewritable && v.pointee.components < 4) anyNarrow = true;
+
+  if (anyNarrow && componentBudget)
+  {
+    // What the stage would declare afterwards: four components for each varying
+    // that gets widened, whatever it declared for the rest.
+    uint64_t after = 0;
+    for (const Varying &v : varyings)
+      after += (v.pointee.rewritable && v.pointee.components < 4) ? 4u : (uint64_t)v.pointee.components;
+    if (after > componentBudget)
+    {
+      if (why)
+      {
+        char buf[192];
+        snprintf(buf, sizeof buf,
+                 "widening to four components would declare %llu varying components and this device allows %u",
+                 (unsigned long long)after, componentBudget);
+        *why = buf;
+      }
+      out->assign(spirv.begin(), spirv.end());
+      return NormaliseResult::Refused;
+    }
+  }
 
   if (storage == kNoStorage || !anyNarrow)
   {

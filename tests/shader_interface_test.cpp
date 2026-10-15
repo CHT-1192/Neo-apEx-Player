@@ -227,6 +227,46 @@ int main()
     Check(out == vs.spirv, "and that module comes back untouched");
   }
 
+  // ---- the component budget ---------------------------------------------
+  // Widening every varying to four components is what makes any pair link, but
+  // it is also four times the components: a shader with 40 float varyings would
+  // need 160, and the device this runs on allows 124 (it failed to compile the
+  // pipeline until this was handled).  With a budget the widening does not fit
+  // in, the module has to come back exactly as it was.
+  {
+    std::string src = "\nstruct VSIN { float3 Position : POSITION0; };\n";
+    src += "struct VSOUTM {\n\tfloat4 Position : SV_POSITION;\n";
+    for (int i = 0; i < 40; i++) src += "\tfloat v" + std::to_string(i) + " : TEXCOORD" + std::to_string(i) + ";\n";
+    src += "};\n\nVSOUTM v(VSIN x)\n{\n\tVSOUTM k;\n\tk.Position=float4(x.Position,1);\n";
+    for (int i = 0; i < 40; i++) src += "\tk.v" + std::to_string(i) + "=" + std::to_string(i) + ".0;\n";
+    src += "\treturn k;\n}\n";
+
+    phxvk::CompiledShader many = phxvk::CompileHLSL(src.c_str(), src.size(), "v",
+                                                    phxvk::ShaderStage::Vertex, "many-varyings/vs_5_0");
+    Check(many.ok, "a vertex shader with 40 float varyings compiles");
+    if (many.ok)
+    {
+      std::vector<uint32_t> out;
+      std::string why2;
+      const phxvk::NormaliseResult r1 =
+          phxvk::NormaliseVaryings(many.spirv, phxvk::ShaderStage::Vertex, &out, &why2, 0);
+      Check(r1 == phxvk::NormaliseResult::Rewritten, "with no budget it is widened (%s)",
+            r1 == phxvk::NormaliseResult::Rewritten ? "Rewritten" : why2.c_str());
+
+      const phxvk::NormaliseResult r2 =
+          phxvk::NormaliseVaryings(many.spirv, phxvk::ShaderStage::Vertex, &out, &why2, 124);
+      Check(r2 == phxvk::NormaliseResult::Refused, "with a 124 component budget it is refused");
+      Check(out == many.spirv, "and the module comes back untouched");
+      Check(why2.find("124") != std::string::npos, "and the reason names the budget (%s)", why2.c_str());
+
+      // The same shader with a budget it fits in is widened as usual.
+      const phxvk::NormaliseResult r3 =
+          phxvk::NormaliseVaryings(many.spirv, phxvk::ShaderStage::Vertex, &out, &why2, 160);
+      Check(r3 == phxvk::NormaliseResult::Rewritten, "with a 160 component budget it fits (%s)",
+            r3 == phxvk::NormaliseResult::Rewritten ? "Rewritten" : why2.c_str());
+    }
+  }
+
   printf("%d failed check(s)\n", g_failures);
   return g_failures;
 }

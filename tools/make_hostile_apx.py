@@ -524,6 +524,116 @@ void g(triangle VSOUT i[3], inout TriangleStream<VSOUT> o)
 	o.Append(i[0]); o.Append(i[1]); o.Append(i[2]);
 }
 """,
+    # ---- malformed Append / RestartStrip calls --------------------------
+    # glslang crashed on two of these (docs/STATUS.md MILESTONE 10); the rest
+    # are here to keep the guard honest.
+    "gs-append-no-args": r"""
+[maxvertexcount(3)]
+void g(triangle VSOUT i[3], inout TriangleStream<VSOUT> o)
+{
+	o.Append();
+	o.Append(i[1]);
+	o.Append(i[2]);
+}
+""",
+    "gs-append-two-args": r"""
+[maxvertexcount(3)]
+void g(triangle VSOUT i[3], inout TriangleStream<VSOUT> o)
+{
+	o.Append(i[0], i[1]);
+	o.Append(i[1]);
+	o.Append(i[2]);
+}
+""",
+    "gs-append-position-only": r"""
+[maxvertexcount(3)]
+void g(triangle VSOUT i[3], inout TriangleStream<VSOUT> o)
+{
+	o.Append(i[0].Position);
+	o.Append(i[1]);
+	o.Append(i[2]);
+}
+""",
+    "gs-append-undefined-function": r"""
+[maxvertexcount(3)]
+void g(triangle VSOUT i[3], inout TriangleStream<VSOUT> o)
+{
+	o.Append(noSuchFunction(i[0]));
+	o.Append(i[1]);
+	o.Append(i[2]);
+}
+""",
+    "gs-restartstrip-with-arg": r"""
+[maxvertexcount(3)]
+void g(triangle VSOUT i[3], inout TriangleStream<VSOUT> o)
+{
+	o.Append(i[0]);
+	o.RestartStrip(1);
+	o.Append(i[1]);
+	o.Append(i[2]);
+}
+""",
+    # ---- out of range input access --------------------------------------
+    # The translator copies the body verbatim, so an index the shader should
+    # never have written ends up indexing the generated local array.
+    "gs-input-index-oob": r"""
+[maxvertexcount(3)]
+void g(triangle VSOUT i[3], inout TriangleStream<VSOUT> o)
+{
+	o.Append(i[99]);
+	o.Append(i[1]);
+	o.Append(i[2]);
+}
+""",
+    "gs-input-index-negative": r"""
+[maxvertexcount(3)]
+void g(triangle VSOUT i[3], inout TriangleStream<VSOUT> o)
+{
+	o.Append(i[-1]);
+	o.Append(i[1]);
+	o.Append(i[2]);
+}
+""",
+    # ---- extreme counts --------------------------------------------------
+    "gs-maxvertex-0": r"""
+[maxvertexcount(0)]
+void g(triangle VSOUT i[3], inout TriangleStream<VSOUT> o)
+{
+}
+""",
+    "gs-maxvertex-1024": r"""
+[maxvertexcount(1024)]
+void g(triangle VSOUT i[3], inout TriangleStream<VSOUT> o)
+{
+	[unroll] for (int k=0;k<1024;k++)
+	{
+		VSOUT r=i[k%3];
+		r.Position.xy*=1.0+0.0001*k;
+		o.Append(r);
+	}
+}
+""",
+    "gs-literal-loop-10000": r"""
+[maxvertexcount(3)]
+void g(triangle VSOUT i[3], inout TriangleStream<VSOUT> o)
+{
+	[unroll] for (int k=0;k<10000;k++) o.Append(i[k%3]);
+}
+""",
+    "gs-deep-nesting": r"""
+[maxvertexcount(3)]
+void g(triangle VSOUT i[3], inout TriangleStream<VSOUT> o)
+{
+	if (i[0].p.x > -100) { if (i[0].p.x > -99) { if (i[0].p.x > -98) { if (i[0].p.x > -97) {
+	if (i[0].p.x > -96) { if (i[0].p.x > -95) { if (i[0].p.x > -94) { if (i[0].p.x > -93) {
+	if (i[0].p.x > -92) { if (i[0].p.x > -91) { if (i[0].p.x > -90) { if (i[0].p.x > -89) {
+	if (i[0].p.x > -88) { if (i[0].p.x > -87) { if (i[0].p.x > -86) { if (i[0].p.x > -85) {
+	if (i[0].p.x > -84) { if (i[0].p.x > -83) { if (i[0].p.x > -82) { if (i[0].p.x > -81) {
+	if (i[0].p.x > -80) { if (i[0].p.x > -79) { if (i[0].p.x > -78) { if (i[0].p.x > -77) {
+		o.Append(i[0]); o.Append(i[1]); o.Append(i[2]);
+	} } } } } } } } } } } } } } } } } } } } } } } } }
+}
+""",
 }
 
 # Structs and helper functions the GS cases above refer to.
@@ -1070,6 +1180,45 @@ TRUST_CASES = {
 # --------------------------------------------------------------------------
 # The generator itself.
 
+def many_varyings(n):
+    """A vertex stage declaring n float varyings, against a pixel stage that
+    reads all of them.
+
+    This probes the limit src/rhi/shader_interface.cpp moves: it widens EVERY
+    varying to four components, so n scalars become 4n components, and a device
+    has only so many vertex output components.
+    """
+    outs = "\n".join("\tfloat v%d : TEXCOORD%d;" % (i, i) for i in range(n))
+    sets = "\n".join("\tk.v%d = x.UV.x * %d.0;" % (i, i) for i in range(n))
+    sums = " + ".join("v.v%d" % i for i in range(n))
+    return dict(
+        vsout="""
+struct VSOUTM
+{
+	float4 Position : SV_POSITION;
+%s
+};
+""" % outs,
+        vs="""
+VSOUTM v(VSIN x)
+{
+	VSOUTM k;
+	k.Position=mul(projmat,mul(viewmat,mul(worldmat,float4(x.Position,1))));
+%s
+	return k;
+}
+""" % sets,
+        ps="""
+PSOUT p(VSOUTM v)
+{
+	PSOUT o;
+	o.Color=float4((%s)*0.001,1,1,1);
+	o.NormalZ=0;
+	return o;
+}
+""" % sums)
+
+
 def technique_bounds(xml, tech):
     i = xml.find("<rendertechnique>\n    <GUID>%s" % tech)
     if i < 0:
@@ -1156,6 +1305,17 @@ float4 d(HSCTRL c, float3 bary : SV_DomainLocation)
 
     for name, fn in TRUST_CASES.items():
         cases.append((name, "loader trust: %s" % name, "no crash", fn))
+
+    # The interface widening in src/rhi/shader_interface.cpp can move a shader
+    # over the device's vertex output component limit, because four components
+    # per varying is more than one.
+    for n in (8, 16, 24, 32, 40, 64):
+        spec = many_varyings(n)
+        code = shader(vs=spec["vs"], ps=spec["ps"], vsout=spec["vsout"])
+        cases.append(("iface-many-varyings-%d" % n,
+                      "vertex/pixel interface: %d float varyings" % n,
+                      "widened to %d components" % (4 * n),
+                      lambda xml, c=code, t=tech: replace_code(xml, t, c)))
 
     for name, spec in VALUE_CASES.items():
         old, new = spec

@@ -73,7 +73,18 @@ enum class NormaliseResult
 // when a varying is referenced in a way this rewrite cannot follow -- the
 // caller then keeps today's behaviour for that module rather than being handed
 // a broken one.
+// `componentBudget` is how many varying components the stage may declare
+// afterwards (maxVertexOutputComponents for a vertex stage,
+// maxFragmentInputComponents for a pixel stage); 0 means no limit.  Widening
+// every varying to four components is what makes any pair link, but it is also
+// four times the components -- a shader with 32 float varyings would need 128,
+// which is at or past what the device has, and the pipeline would fail to
+// compile where it used to work.  When the widening does not fit, the module is
+// left exactly as it was: a shader that many varyings is far more likely to
+// already agree on both sides than to need reconciling, and one that does need
+// it could not be run on this device anyway.
 NormaliseResult NormaliseVaryings(const std::vector<uint32_t> &spirv, ShaderStage stage,
-                                  std::vector<uint32_t> *out, std::string *why);
+                                  std::vector<uint32_t> *out, std::string *why,
+                                  uint32_t componentBudget = 0);
 
 } // namespace phxvk

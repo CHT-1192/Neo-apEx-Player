@@ -109,6 +109,108 @@ HRESULT CompileCommon(LPCVOID pSrcData, SIZE_T SrcDataSize, const D3D_SHADER_MAC
   debugName += "/";
   debugName += pTarget;
 
+  // ---------------------------------------------------------------------
+  // Geometry shaders, on a device that has no geometry shader stage.
+  //
+  // The original entry point is never compiled here.  Nothing on this device
+  // can run it, and the shim only needs two things out of it: a module to hand
+  // back to CreateGeometryShader (a registry key, because pipeline creation
+  // finds the replacement through the geometry shader's SPIR-V) and the shape,
+  // which DescribeGeometryShader reads out of the HLSL by itself.  So the
+  // *translated* vertex stage is compiled and handed back in its place, with
+  // the emulation registered under those bytes.
+  //
+  // That also removes a crash.  Compiling a malformed geometry shader takes
+  // glslang down inside HlslParseContext::finalizeAppendMethods(), which calls
+  // handleAssign() on a null argument node for an Append whose argument does
+  // not type check:
+  //
+  //   Append(1.0)                 (not the stream's element type)
+  //   Append(undefinedFunction()) (does not resolve)
+  //
+  // The translated source has no Append methods left to finalise -- each one is
+  // a `return` -- so a shape that translates at all may not crash anything, and
+  // a shape that does not translate is reported without being compiled.
+  // ---------------------------------------------------------------------
+  if (stage == phxvk::ShaderStage::Geometry && phxvk::Vk().features.geometryShader == VK_FALSE)
+  {
+    const phxvk::GeometryShaderInfo shape =
+        phxvk::DescribeGeometryShader(source.c_str(), source.size(), pEntrypoint);
+    if (shape.present)
+    {
+      const phxvk::GsProgram gs = phxvk::AnalyseGeometryShader(source, pEntrypoint, "v", shape);
+      phxvk::CompiledShader emu;
+      if (gs.ok)
+      {
+        const std::string extra = phxvk::TranslateGeometryShaderToVertex(source, gs, pEntrypoint, "v", "GSEMU_PACKED");
+        if (!extra.empty())
+        {
+          const std::string combined = source + extra;
+          const std::string emuEntry = std::string(pEntrypoint) + "_emu";
+          emu = phxvk::CompileHLSL(combined.c_str(), combined.size(), emuEntry.c_str(),
+                                   phxvk::ShaderStage::Vertex, "gs-emu/vs_5_0");
+          if (!emu.ok)
+          {
+            FILE *f = fopen("/tmp/gsemu-fail.hlsl", "w");
+            if (f) { fwrite(combined.data(), 1, combined.size(), f); fclose(f); }
+            phxvk::LogWarn("[d3d11] geometry shader emulation compiled nothing (%s): %s",
+                           pEntrypoint, emu.error.c_str());
+          }
+        }
+      }
+      else
+      {
+        phxvk::LogWarn("[d3d11] geometry shader not emulated (%s): %s", pEntrypoint, gs.reason.c_str());
+      }
+
+      if (!gs.ok || !emu.ok)
+      {
+        // No usable replacement, so this technique simply has no geometry
+        // stage.  Report it the way the engine already understands -- Material
+        // Tool.cpp:75 treats an error containing X3501 as "this stage is not
+        // present" and stays quiet about it -- rather than handing back a
+        // pipeline that would be dropped at draw time anyway.
+        if (ppErrorMsgs)
+          *ppErrorMsgs = CreateBlobString("error X3501: '" + std::string(pEntrypoint) +
+                                          "': geometry shader not reproduced on this device\n");
+        return E_FAIL;
+      }
+
+      // The emulated stage's own reflection has to be registered as well: it
+      // was compiled here rather than through D3DCompile, so nothing else knows
+      // its descriptor bindings or its input locations.
+      ShaderReflectionRecord emuRec;
+      emuRec.reflection = emu.reflection;
+      emuRec.stage = phxvk::ShaderStage::Vertex;
+      RegisterShaderReflection(emu.spirv.data(), emu.spirv.size() * sizeof(uint32_t), emuRec);
+
+      // ...and the same reflection is what CreateGeometryShader will look up
+      // for the bytes handed back below, so the stage is described as what it
+      // really is.  `geometry` carries the shape, which is what the caller
+      // reports and what tells pipeline creation there is something to emulate.
+      emuRec.geometry = shape;
+      emuRec.stage = phxvk::ShaderStage::Geometry;
+      RegisterShaderReflection(emu.spirv.data(), emu.spirv.size() * sizeof(uint32_t), emuRec);
+
+      EmulatedGeometryShader entry;
+      entry.vertexSpirv = emu.spirv;
+      entry.program = gs;
+      RegisterEmulatedGeometryShader(emu.spirv.data(), emu.spirv.size() * sizeof(uint32_t), entry);
+
+      static int logged = 0;
+      if (logged++ < 8)
+        phxvk::LogInfo("[d3d11] geometry shader emulated: %s in x%d -> %d vertices per primitive, "
+                       "%zu strip segment(s); vertex stage '%s_emu' compiled",
+                       shape.inputPrimitive.c_str(), shape.inputVertices, gs.slots,
+                       gs.restartsAfter.size() +
+                           (gs.restartsAfter.empty() || gs.restartsAfter.back() != gs.slots ? 1 : 0),
+                       pEntrypoint);
+
+      if (ppCode) *ppCode = CreateBlob(emu.spirv.data(), emu.spirv.size() * sizeof(uint32_t));
+      return S_OK;
+    }
+  }
+
   phxvk::CompiledShader compiled = phxvk::CompileHLSL(source.c_str(), source.size(), pEntrypoint, stage, debugName.c_str());
   if (!compiled.ok)
   {
@@ -130,58 +232,6 @@ HRESULT CompileCommon(LPCVOID pSrcData, SIZE_T SrcDataSize, const D3D_SHADER_MAC
       phxvk::LogError("D3DCompile(%s) failed: %s", debugName.c_str(), compiled.error.c_str());
     }
     return E_FAIL;
-  }
-
-  // A geometry shader cannot run on this device, but it can be reproduced: the
-  // shape is known and the HLSL is right here, so translate and precompile the
-  // vertex stage that stands in for it.  Pipeline creation picks it up from the
-  // geometry shader's SPIR-V.
-  if (stage == phxvk::ShaderStage::Geometry && compiled.geometry.present)
-  {
-    const phxvk::GsProgram gs = phxvk::AnalyseGeometryShader(source, pEntrypoint, "v", compiled.geometry);
-    if (gs.ok)
-    {
-      const std::string extra = phxvk::TranslateGeometryShaderToVertex(source, gs, pEntrypoint, "v", "GSEMU_PACKED");
-      phxvk::CompiledShader emu;
-      if (!extra.empty())
-      {
-        const std::string combined = source + extra;
-        const std::string emuEntry = std::string(pEntrypoint) + "_emu";
-        emu = phxvk::CompileHLSL(combined.c_str(), combined.size(), emuEntry.c_str(), phxvk::ShaderStage::Vertex, "gs-emu/vs_5_0");
-        if (!emu.ok) { FILE *f = fopen("/tmp/gsemu-fail.hlsl", "w"); if (f) { fwrite(combined.data(), 1, combined.size(), f); fclose(f); } }
-      }
-      if (emu.ok)
-      {
-        // The emulated stage's own reflection has to be registered too: it was
-        // compiled here rather than through D3DCompile, so nothing else knows
-        // its descriptor bindings.
-        ShaderReflectionRecord emuRec;
-        emuRec.reflection = emu.reflection;
-        emuRec.stage = phxvk::ShaderStage::Vertex;
-        RegisterShaderReflection(emu.spirv.data(), emu.spirv.size() * sizeof(uint32_t), emuRec);
-
-        EmulatedGeometryShader entry;
-        entry.vertexSpirv = emu.spirv;
-        entry.program = gs;
-        RegisterEmulatedGeometryShader(compiled.spirv.data(), compiled.spirv.size() * sizeof(uint32_t), entry);
-        static int logged = 0;
-        if (logged++ < 8)
-          phxvk::LogInfo("[d3d11] geometry shader emulated: %s in x%d -> %d vertices per primitive, "
-                         "%zu strip segment(s); vertex stage '%s_emu' compiled",
-                         compiled.geometry.inputPrimitive.c_str(), compiled.geometry.inputVertices,
-                         gs.slots, gs.restartsAfter.size() + (gs.restartsAfter.empty() || gs.restartsAfter.back() != gs.slots ? 1 : 0),
-                         pEntrypoint);
-      }
-      else
-      {
-        phxvk::LogWarn("[d3d11] geometry shader emulation compiled nothing (%s): %s",
-                       pEntrypoint, emu.error.empty() ? "translation produced no source" : emu.error.c_str());
-      }
-    }
-    else
-    {
-      phxvk::LogWarn("[d3d11] geometry shader not emulated (%s): %s", pEntrypoint, gs.reason.c_str());
-    }
   }
 
   ShaderReflectionRecord rec;

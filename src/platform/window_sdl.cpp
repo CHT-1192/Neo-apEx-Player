@@ -527,8 +527,24 @@ TBOOL CCoreWindowHandlerWin::Initialize(const CCoreWindowParameters &WindowParam
   if (!wp.ResizeDisabled) flags |= SDL_WINDOW_RESIZABLE;
   if (wp.FullScreen) flags |= SDL_WINDOW_FULLSCREEN;
   if (wp.Maximized) flags |= SDL_WINDOW_MAXIMIZED;
+  // An unattended run must not take the desktop's focus.
+  //
+  // SDL maps a window in SDL_CreateWindow and macOS then activates it, so any
+  // script that runs the player once per case -- the hostile .apx sweep, ci/,
+  // anything that loops over projects -- puts a new window in front of whatever
+  // the person at the keyboard is doing, once per case.  That makes the machine
+  // unusable, so `--headless` sets this and the runners pass it.
+  const bool headless = SDL_getenv("NEO_APEX_HEADLESS") != NULL;
+  if (headless) flags |= SDL_WINDOW_HIDDEN | SDL_WINDOW_NOT_FOCUSABLE;
 
   SDL_Window *window = SDL_CreateWindow(wp.WindowTitle ? wp.WindowTitle : "", XRes, YRes, flags);
+  if (window && headless)
+  {
+    const SDL_WindowFlags got = SDL_GetWindowFlags(window);
+    LOG_WARN("[core] window: headless, so the window stays hidden and is never shown or raised "
+             "(hidden %d, not focusable %d); it will not take the desktop's focus",
+             (got & SDL_WINDOW_HIDDEN) ? 1 : 0, (got & SDL_WINDOW_NOT_FOCUSABLE) ? 1 : 0);
+  }
   if (!window)
   {
     LOG_ERR("[core] window: SDL_CreateWindow(%dx%d) failed: %s", (int)XRes, (int)YRes, SDL_GetError());
@@ -620,10 +636,14 @@ TBOOL CCoreWindowHandlerWin::Initialize(const CCoreWindowParameters &WindowParam
   // The Win32 original showed the window after the device was created (the
   // swapchain is built from a not-yet-visible window there too).  SDL maps the
   // window in SDL_CreateWindow unless SDL_WINDOW_HIDDEN was requested, so these
-  // calls only raise/focus it, mirroring SetForegroundWindow/SetFocus.
-  SDL_ShowWindow(window);
-  SDL_RaiseWindow(window);
-  if (wp.Maximized) SDL_MaximizeWindow(window);
+  // calls only raise/focus it, mirroring SetForegroundWindow/SetFocus -- and
+  // that is exactly what must not happen when nobody is watching.
+  if (!headless)
+  {
+    SDL_ShowWindow(window);
+    SDL_RaiseWindow(window);
+    if (wp.Maximized) SDL_MaximizeWindow(window);
+  }
 
   // Show/maximize are asynchronous on some platforms: this picks up the size
   // the window manager settled on, and notifies the device if it changed.
@@ -996,8 +1016,11 @@ void CCoreWindowHandlerWin::ToggleFullScreen()
     }
 
     SDL_SetWindowResizable(window, (dwStyle & (TS32)SDL_WINDOW_RESIZABLE) != 0);
-    SDL_ShowWindow(window);
-    SDL_RaiseWindow(window);
+    if (SDL_getenv("NEO_APEX_HEADLESS") == NULL)
+    {
+      SDL_ShowWindow(window);
+      SDL_RaiseWindow(window);
+    }
 
     Device->SetFullScreenMode(false, 0, 0);
     HandleResize();

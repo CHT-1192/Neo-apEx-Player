@@ -53,7 +53,9 @@ NOTE_PATTERNS = [
 def one_case(player, path, frames, budget):
     log = []
     started = time.time()
-    proc = subprocess.Popen([player, path, "--no-ui", "--no-audio", "--no-vsync",
+    # --headless: do not show or focus a window.  Without it every case puts a
+    # window in front of whatever the person at the keyboard is doing.
+    proc = subprocess.Popen([player, path, "--headless", "--no-ui", "--no-audio", "--no-vsync",
                              "--fixed-fps", "--frames", str(frames)],
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             text=True, errors="replace", start_new_session=True)

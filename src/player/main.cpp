@@ -86,6 +86,10 @@ struct Options
   // window or device exists.  --no-ui skips it, which is what scripted runs
   // (ci/, tools/, --dump-frame) use.
   bool enableUi = true;
+  // --headless: never show or focus a window.  A script that runs the player
+  // once per case would otherwise put a window in front of whatever the person
+  // at the keyboard is doing, once per case.
+  bool headless = false;
 };
 
 static void Usage(const char *argv0)
@@ -111,6 +115,7 @@ static void Usage(const char *argv0)
           "  --frame-timeout MS   abort if a single frame exceeds MS (default 5000;\n"
           "                       0 disables it).  A hung frame would otherwise take\n"
           "                       the whole desktop with it.\n"
+          "  --headless           never show or focus a window (for scripted runs)\n"
           "  --validate           enable Vulkan validation layers\n"
           "  --dump-frame N=FILE  write frame N to FILE as binary PPM (repeatable)\n"
           "  --dump-frame loading=FILE  write the first loading-screen frame\n",
@@ -147,6 +152,15 @@ static bool ParseArgs(int argc, char **argv, Options &o)
     else if (a == "--frame-timeout") o.frameTimeoutMs = atoi(next("--frame-timeout"));
     else if (a == "--ui") o.enableUi = true;
     else if (a == "--no-ui") o.enableUi = false;
+    else if (a == "--headless")
+    {
+      // The window layer reads this before it creates the SDL window.  It is an
+      // environment variable rather than a field of the engine's window
+      // parameters so that every spawn path can set it without touching the
+      // vendored headers.
+      o.headless = true;
+      setenv("NEO_APEX_HEADLESS", "1", 1);
+    }
     else if (a == "--validate") o.validate = true;
     else if (a == "--frames") o.frames = atoll(next("--frames"));
     else if (a == "--start-frame") o.startFrame = atoll(next("--start-frame"));

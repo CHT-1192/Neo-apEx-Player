@@ -75,7 +75,7 @@ apexcompare() {
   local warm=30 start
   start=$((frame - warm))
   if [ "$start" -lt 0 ]; then start=0; warm=$frame; fi
-  "$player" "$apx" --no-ui --no-audio --no-vsync --fixed-fps \
+  "$player" "$apx" --headless --no-ui --no-audio --no-vsync --fixed-fps \
       --start-frame "$start" --frames $((warm + 1)) \
       --dump-frame "$warm"="$port" >/dev/null 2>&1
   [ -f "$port" ] || { echo "apexcompare: the player produced no frame" >&2; return 1; }

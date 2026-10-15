@@ -58,6 +58,21 @@ behind both APIs.
 * Mesh text generation uses Windows GDI glyph outlines + the GLU tessellator;
   macOS provides GLU via the OpenGL framework (verified to build and run).
 
+### Running the player must not take the desktop's focus
+
+A sweep runs the player once per case, and SDL maps a window in
+`SDL_CreateWindow` which macOS then activates -- so the sweep put a new window
+in front of whoever was at the keyboard once per case, which makes the machine
+unusable for anything else.  `--headless` (`window_sdl.cpp`) now creates the
+window with `SDL_WINDOW_HIDDEN | SDL_WINDOW_NOT_FOCUSABLE` and skips the
+`SDL_ShowWindow`/`SDL_RaiseWindow` pair entirely, so nothing is mapped and
+nothing can be activated; it logs the flags it actually got, which is how the
+behaviour is checked rather than assumed.  `tools/run_hostile_apx.py`,
+`tools/dshrc-apexcompare.sh` and `.dshrc` all pass it.  (The crash dialogs were
+a second, unrelated source: killing `CoreServicesUIAgent` dismissed the pending
+ones and `defaults write com.apple.CrashReporter DialogType none` stops new
+ones.)
+
 ## MILESTONE 10: a hostile .apx, and what it broke
 
 Clean Slate is one project, written by one team, and the port had passed

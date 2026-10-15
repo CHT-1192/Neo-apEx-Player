@@ -72,7 +72,14 @@ bool BuildShaderCommon(const void *bytecode, SIZE_T length, phxvk::ShaderStage s
   const std::vector<uint32_t> original(words, words + length / sizeof(uint32_t));
   std::vector<uint32_t> normalised;
   std::string refusal;
-  const phxvk::NormaliseResult result = phxvk::NormaliseVaryings(original, stage, &normalised, &refusal);
+  // The widening has to fit in the device's varying budget: it multiplies every
+  // varying by four, and a shader with 32 of them would then need 128
+  // components.
+  const VkPhysicalDeviceLimits &limits = phxvk::Vk().props.limits;
+  const uint32_t budget = (stage == phxvk::ShaderStage::Vertex) ? limits.maxVertexOutputComponents
+                        : (stage == phxvk::ShaderStage::Pixel) ? limits.maxFragmentInputComponents
+                                                              : 0u;
+  const phxvk::NormaliseResult result = phxvk::NormaliseVaryings(original, stage, &normalised, &refusal, budget);
   if (result == phxvk::NormaliseResult::Refused)
     phxvk::LogWarn("%s: a varying could not be widened to four components (%s), so this shader keeps its "
                    "declared interface and may fail to link against a pixel shader that declares a "
