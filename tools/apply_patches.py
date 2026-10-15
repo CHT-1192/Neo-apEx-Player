@@ -1188,6 +1188,35 @@ private:""",
     SplineResults[ s->Type ] = s->Spline->Value[ 0 ];""",
         "guard the SplineResults[] index on the read side too.",
     ),
+    (
+        "Phoenix/Timeline.cpp",
+        """    //render here
+    phxContext->Draw( 6, 0 );""",
+        """    // [port] diagnostic: a shader-toy pass with nowhere to draw, or with no
+    // pixel shader, renders nothing and says nothing about it.  The loading
+    // screen is exactly this path, and it came out blank without a single log
+    // line pointing at it, so report the first few passes' state -- including
+    // the four floats that become cbuffer b0, whose XRes/YRes entries are only
+    // written when Target is non-null.
+    {
+      static int reportedShadertoy = 0;
+      if ( reportedShadertoy < 8 )
+      {
+        reportedShadertoy++;
+        // No logging macro reaches this translation unit, so write it directly.
+        printf( "[shadertoy] pass %d of %d: rendertarget %p, ps %p, target %p, b0 = %.4f %.4f %.4f %.4f\n",
+                (int)x, (int)Tech->PassCount, (void*)MaterialState[ x ]->RenderTarget,
+                (void*)Tech->RenderPasses[ x ]->PS, (void*)Target,
+                ShaderData[ 0 ], ShaderData[ 1 ], ShaderData[ 2 ], ShaderData[ 3 ] );
+        fflush( stdout );
+      }
+    }
+
+    //render here
+    phxContext->Draw( 6, 0 );""",
+        "a shader-toy pass with no render target renders nothing silently; this is "
+        "the loading-screen path.",
+    ),
 ]
 
 
