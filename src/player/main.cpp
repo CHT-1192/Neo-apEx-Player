@@ -160,6 +160,13 @@ static bool ParseArgs(int argc, char **argv, Options &o)
       // vendored headers.
       o.headless = true;
       setenv("NEO_APEX_HEADLESS", "1", 1);
+      // SDL_HINT_MAC_BACKGROUND_APP: "0" (the default) means the application is
+      // brought to the foreground when launched on macOS.  That is what made a
+      // sweep unusable -- the window being hidden does not help, because the
+      // activation happens at launch and has nothing to do with the window.
+      // SDL reads hints from the environment, so exporting it covers every
+      // later SDL_Init() regardless of ordering.
+      setenv("SDL_MAC_BACKGROUND_APP", "1", 1);
     }
     else if (a == "--validate") o.validate = true;
     else if (a == "--frames") o.frames = atoll(next("--frames"));

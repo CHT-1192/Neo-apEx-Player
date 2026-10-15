@@ -55,8 +55,13 @@ def one_case(player, path, frames, budget):
     started = time.time()
     # --headless: do not show or focus a window.  Without it every case puts a
     # window in front of whatever the person at the keyboard is doing.
+    # SDL_MAC_BACKGROUND_APP=1 is the one that matters on macOS: SDL otherwise
+    # brings the process to the foreground when it launches, which a sweep does
+    # once per case.  The flag sets it too, but exporting it here means it is in
+    # place before the process starts.
+    env = dict(os.environ, NEO_APEX_HEADLESS="1", SDL_MAC_BACKGROUND_APP="1")
     proc = subprocess.Popen([player, path, "--headless", "--no-ui", "--no-audio", "--no-vsync",
-                             "--fixed-fps", "--frames", str(frames)],
+                             "--fixed-fps", "--frames", str(frames)], env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             text=True, errors="replace", start_new_session=True)
     try:

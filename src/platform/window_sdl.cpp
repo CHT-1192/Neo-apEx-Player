@@ -536,6 +536,12 @@ TBOOL CCoreWindowHandlerWin::Initialize(const CCoreWindowParameters &WindowParam
   // unusable, so `--headless` sets this and the runners pass it.
   const bool headless = SDL_getenv("NEO_APEX_HEADLESS") != NULL;
   if (headless) flags |= SDL_WINDOW_HIDDEN | SDL_WINDOW_NOT_FOCUSABLE;
+  // Hiding the window is not enough on macOS: SDL brings the application to the
+  // foreground when it launches unless this hint says otherwise, and that alone
+  // makes a script that runs the player once per case unusable.  Setting it here
+  // is belt and braces -- it is only fully effective before SDL_Init(), which is
+  // why the environment variable of the same name is exported as well.
+  if (headless) SDL_SetHint(SDL_HINT_MAC_BACKGROUND_APP, "1");
 
   SDL_Window *window = SDL_CreateWindow(wp.WindowTitle ? wp.WindowTitle : "", XRes, YRes, flags);
   if (window && headless)
@@ -544,6 +550,9 @@ TBOOL CCoreWindowHandlerWin::Initialize(const CCoreWindowParameters &WindowParam
     LOG_WARN("[core] window: headless, so the window stays hidden and is never shown or raised "
              "(hidden %d, not focusable %d); it will not take the desktop's focus",
              (got & SDL_WINDOW_HIDDEN) ? 1 : 0, (got & SDL_WINDOW_NOT_FOCUSABLE) ? 1 : 0);
+    LOG_WARN("[core] window: SDL_MAC_BACKGROUND_APP=%s (this is what stops macOS bringing the "
+             "process to the foreground when it launches)",
+             SDL_GetHint(SDL_HINT_MAC_BACKGROUND_APP) ? SDL_GetHint(SDL_HINT_MAC_BACKGROUND_APP) : "(unset)");
   }
   if (!window)
   {

@@ -63,11 +63,17 @@ behind both APIs.
 A sweep runs the player once per case, and SDL maps a window in
 `SDL_CreateWindow` which macOS then activates -- so the sweep put a new window
 in front of whoever was at the keyboard once per case, which makes the machine
-unusable for anything else.  `--headless` (`window_sdl.cpp`) now creates the
-window with `SDL_WINDOW_HIDDEN | SDL_WINDOW_NOT_FOCUSABLE` and skips the
+unusable for anything else.  the real cause turned out to be
+`SDL_HINT_MAC_BACKGROUND_APP`: its default of `"0"` means SDL **brings the
+application to the foreground when it launches on macOS**, which has nothing to
+do with the window -- hiding the window changed nothing.  `--headless` now sets
+that hint (and exports the environment variable of the same name, because the
+hint is only fully effective before `SDL_Init()`), creates the window with
+`SDL_WINDOW_HIDDEN | SDL_WINDOW_NOT_FOCUSABLE`, and skips the
 `SDL_ShowWindow`/`SDL_RaiseWindow` pair entirely, so nothing is mapped and
-nothing can be activated; it logs the flags it actually got, which is how the
-behaviour is checked rather than assumed.  `tools/run_hostile_apx.py`,
+nothing is activated.  It logs both the window flags and the hint it got, which
+is how the behaviour is checked rather than assumed:
+`(hidden 1, not focusable 1)` and `SDL_MAC_BACKGROUND_APP=1`.  `tools/run_hostile_apx.py`,
 `tools/dshrc-apexcompare.sh` and `.dshrc` all pass it.  (The crash dialogs were
 a second, unrelated source: killing `CoreServicesUIAgent` dismissed the pending
 ones and `defaults write com.apple.CrashReporter DialogType none` stops new
