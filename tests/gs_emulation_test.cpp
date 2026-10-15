@@ -573,7 +573,7 @@ int main()
 
   phxvk::FatGeometry fat;
   std::string err;
-  const bool built = phxvk::BuildFatGeometry(gs, verts, sizeof verts, sizeof verts[0], true, idx, 4, 0, fat, &err);
+  const bool built = phxvk::BuildFatGeometry(gs, verts, sizeof verts, sizeof verts[0], true, idx, 4, 0, 0, fat, &err);
   Check(built, "the fat geometry was built%s%s", built ? "" : ": ", built ? "" : err.c_str());
   Check(fat.vertexCount == 12, "2 lines * 6 slots = 12 emitted vertices (got %u)", fat.vertexCount);
   Check(fat.vertices.size() == 12 * 2 * sizeof(verts[0]), "each emitted vertex carries both endpoints (%zu bytes)",
@@ -642,7 +642,7 @@ int main()
       const size_t stride = 3 * sizeof(float);
       phxvk::FatGeometry fat;
       std::string err;
-      const bool ok = phxvk::BuildFatGeometry(g, vx.data(), vx.size() * sizeof(float), stride, true, nullptr, c.prim * 2, 0, fat, &err);
+      const bool ok = phxvk::BuildFatGeometry(g, vx.data(), vx.size() * sizeof(float), stride, true, nullptr, c.prim * 2, 0, 0, fat, &err);
       Check(ok, "%s: the fat geometry was built%s%s", c.name, ok ? "" : ": ", ok ? "" : err.c_str());
       if (ok)
       {

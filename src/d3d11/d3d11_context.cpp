@@ -2079,11 +2079,11 @@ bool ContextImpl::DrawInternal(bool indexed, UINT count, UINT instanceCount, UIN
         phxvk::LogWarn("[d3d11] cannot emulate the geometry shader for a draw without readable vertex data");
       return false;
     }
-    if (baseVertex != 0 || instanceCount > 1)
+    if (instanceCount > 1)
     {
       static Once once;
       if (once())
-        phxvk::LogWarn("[d3d11] geometry shader emulation ignores a non-zero base vertex or instancing");
+        phxvk::LogWarn("[d3d11] geometry shader emulation does not handle instancing");
       return false;
     }
 
@@ -2092,7 +2092,7 @@ bool ContextImpl::DrawInternal(bool indexed, UINT count, UINT instanceCount, UIN
     const void *indexData = ib ? ib->shadow.data() : nullptr;
     const size_t firstIndex = indexed ? startIndex : 0;
     if (!phxvk::BuildFatGeometry(emulationPlan->program, vb->shadow.data(), vb->shadow.size(), vertexStrides[0],
-                                 indexFormat == DXGI_FORMAT_R32_UINT, indexData, count, firstIndex, fat, &err))
+                                 indexFormat == DXGI_FORMAT_R32_UINT, indexData, count, firstIndex, baseVertex, fat, &err))
     {
       static Once once;
       if (once()) phxvk::LogWarn("[d3d11] geometry shader emulation could not build the fat geometry: %s", err.c_str());

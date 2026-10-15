@@ -172,6 +172,39 @@ disappears with the compile.  That is a change to how the emulation is keyed, so
 it is deliberately not bundled into this round.  Reproduce with
 `work/hostile/cases/gs-append-scalar.apx`.
 
+### Review fixes
+
+A read-through of `src/rhi/gs_emulation.cpp` turned up four things worth
+recording, two of them correctness bugs:
+
+* **`ScanRange`'s non-literal-loop branch tested a variable it never wrote.**
+  The recursion wrote into `scan` and the guard then looked at a fresh, empty
+  `inner`, so `scan.unknown` was never set on that path and a loop whose trip
+  count cannot be read was scanned as if it ran once.  A `RestartStrip` inside
+  such a loop therefore placed the index buffer's restarts by guesswork.  The
+  body is now scanned into `inner`, its Appends are merged once and a restart in
+  it marks the shape unsupported.
+
+* **`IsInsideConditional` was wrong in both directions.**  Anchored on a `}` it
+  treated the *closed* block as the one containing the restart, so
+  `if (a) {} else {} RestartStrip();` -- unconditional -- was called conditional
+  and refused.  And it had no case for `{` at all, so a `RestartStrip` inside a
+  *braced* branch was missed entirely: that is the dangerous direction, because
+  missing it means a wrong picture rather than a refusal.  The walk now asks
+  what opens the brace it is standing in, and steps over a `}` back to its
+  matching `{` because that block has already ended.  Verified both ways: a
+  braced conditional restart followed by Appends is refused, and a restart after
+  an empty `if/else` is emulated.
+
+* `BuildFatGeometry` took `firstIndex` but not D3D11's `BaseVertexLocation`, and
+  the caller refused any draw with a non-zero base vertex instead.  The
+  parameter is now in the API, added to every index the way the input assembler
+  does, so such a draw emulates instead of losing its geometry stage.
+
+* `ReadIntLiteral` accepted a lone `+`/`-` as a literal, because it only checked
+  that a sign had been consumed: `atoi("+")` is 0, so `k < +abc` read as a trip
+  count of zero.  It now requires at least one digit.
+
 ## MILESTONE 11: weird but legal geometry shaders
 
 The corpus above started from deliberately *invalid* shaders.  This round is the

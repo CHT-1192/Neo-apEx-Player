@@ -116,8 +116,11 @@ bool ReadIntLiteral(const std::string &s, size_t &p, int &out)
   SkipSpace(s, p);
   const size_t begin = p;
   if (p < s.size() && (s[p] == '-' || s[p] == '+')) p++;
+  // At least one digit: `+` on its own used to pass this test and atoi("+")
+  // returned 0, so `k < +abc` looked like a literal trip count of zero.
+  const size_t digits = p;
   while (p < s.size() && isdigit((unsigned char)s[p])) p++;
-  if (p == begin) return false;
+  if (p == digits) return false;
   out = atoi(s.substr(begin, p - begin).c_str());
   return true;
 }
@@ -231,15 +234,23 @@ void ScanRange(const std::string &text, size_t begin, size_t end, CallScan &scan
           continue;
         }
       }
-      // A loop whose trip count cannot be read: walk its body once so that a
-      // RestartStrip inside it is still noticed, and mark the shape unsupported.
+      // A loop whose trip count cannot be read: walk its body ONCE, into its own
+      // scan, so its Appends are counted once (the loop may run any number of
+      // times) and a RestartStrip inside it is noticed.  It has to be a separate
+      // scan: a restart inside it makes the whole shape unsupported, because the
+      // strip layout would depend on the trip count.
+      //
+      // This used to pass `scan` to the recursion and then test a fresh, empty
+      // `inner`, so the flag was never set and such a shader was emulated with a
+      // strip layout guessed from "the loop runs once".
       std::string ignored;
       size_t bodyStart = 0, bodyEnd = 0;
       if (ExtractBody(text, at, ignored, &bodyStart, &bodyEnd))
       {
         CallScan inner;
-        ScanRange(text, bodyStart, bodyEnd, scan, depth + 1);
-        if (!inner.restartsAfter.empty()) scan.unknown = true;
+        ScanRange(text, bodyStart, bodyEnd, inner, depth + 1);
+        scan.appends += inner.appends;
+        scan.unknown = scan.unknown || !inner.restartsAfter.empty();
         at = bodyEnd + 1;
         continue;
       }
@@ -290,8 +301,53 @@ bool ConditionalRestartFollowedByAppend(const std::string &body)
   return false;
 }
 
-// Walks outwards from `at` through the enclosing blocks, asking whether any of
-// them is a conditional or loop body.
+// True when the block opened by the brace at `brace` is a conditional or a
+// loop body rather than a plain scope or a function body.
+bool OpenerIsConditional(const std::string &body, size_t brace)
+{
+  size_t r = brace;
+  while (r > 0 && (body[r - 1] == ' ' || body[r - 1] == '\t' || body[r - 1] == '\n' || body[r - 1] == '\r')) r--;
+  if (r > 0 && body[r - 1] == ')')
+  {
+    int depth = 0;
+    size_t q = r;
+    while (q > 0)
+    {
+      q--;
+      if (body[q] == ')') depth++;
+      else if (body[q] == '(' && --depth == 0) break;
+    }
+    const std::string head = PrecedingWord(body, q);
+    return head == "if" || head == "for" || head == "while" || head == "switch";
+  }
+  const std::string head = PrecedingWord(body, r);
+  return head == "else" || head == "do";
+}
+
+// The '{' that opens the block closed by the '}' at `close`.
+size_t MatchingOpenBrace(const std::string &body, size_t close)
+{
+  int depth = 0;
+  size_t q = close + 1;
+  while (q > 0)
+  {
+    q--;
+    if (body[q] == '}') depth++;
+    else if (body[q] == '{' && --depth == 0) return q;
+  }
+  return 0;
+}
+
+// Walks outwards from `at` through the blocks that actually contain it.
+//
+// The first version got two things wrong.  Anchored on a `}` it decided the
+// closed block was the container, so `if (a) {} else {} RestartStrip();` -- an
+// unconditional restart -- was called conditional.  And it had no case for `{`
+// at all, so a RestartStrip inside a *braced* branch was missed entirely: the
+// one direction that matters, because missing it means a wrong picture rather
+// than a refusal.  Anchored on `{` we are inside that block, so ask what opens
+// it; anchored on `}` the block has already ended, so step over it and keep
+// walking out.
 bool IsInsideConditional(const std::string &body, size_t at)
 {
   size_t p = at;
@@ -305,13 +361,33 @@ bool IsInsideConditional(const std::string &body, size_t at)
       while (p > 0 && IsIdentChar(body[p - 1])) p--;
     }
   }
-  for (int guard = 0; guard < 16; guard++)
+  for (int guard = 0; guard < 32 && p > 0; guard++)
   {
-    // Back up over whitespace and at most one statement terminator.
     while (p > 0 && (body[p - 1] == ' ' || body[p - 1] == '\t' || body[p - 1] == '\n' || body[p - 1] == '\r')) p--;
-    if (p > 0 && body[p - 1] == ')')
+    if (p == 0) return false;
+    const char c = body[p - 1];
+    if (c == ';' || c == ',')
     {
-      // `if (...) RestartStrip();` -- braceless.
+      p--;
+      continue;
+    }
+    if (c == '}')
+    {
+      // A block that has already closed: not our container.
+      p = MatchingOpenBrace(body, p - 1);
+      continue;
+    }
+    if (c == '{')
+    {
+      // We are inside this one.
+      if (OpenerIsConditional(body, p - 1)) return true;
+      p--;
+      continue;
+    }
+    if (c == ')')
+    {
+      // A braceless body: `if (x) RestartStrip();`
+      if (OpenerIsConditional(body, p)) return true;
       int depth = 0;
       size_t q = p;
       while (q > 0)
@@ -320,53 +396,10 @@ bool IsInsideConditional(const std::string &body, size_t at)
         if (body[q] == ')') depth++;
         else if (body[q] == '(' && --depth == 0) break;
       }
-      const std::string head = PrecedingWord(body, q);
-      if (head == "if" || head == "for" || head == "while" || head == "switch") return true;
       p = q;
       continue;
     }
-    if (p > 0 && body[p - 1] == '}')
-    {
-      // `} else {` ... find the matching '{' and look at what opens it.
-      int depth = 0;
-      size_t q = p;
-      while (q > 0)
-      {
-        q--;
-        if (body[q] == '}') depth++;
-        else if (body[q] == '{' && --depth == 0) break;
-      }
-      p = q;
-      // What is in front of the '{'?
-      size_t r = p;
-      while (r > 0 && (body[r - 1] == ' ' || body[r - 1] == '\t' || body[r - 1] == '\n' || body[r - 1] == '\r')) r--;
-      if (r > 0 && body[r - 1] == ')')
-      {
-        int d2 = 0;
-        size_t q2 = r;
-        while (q2 > 0)
-        {
-          q2--;
-          if (body[q2] == ')') d2++;
-          else if (body[q2] == '(' && --d2 == 0) break;
-        }
-        const std::string head = PrecedingWord(body, q2);
-        if (head == "if" || head == "for" || head == "while" || head == "switch" || head == "else") return true;
-        p = q2;
-        continue;
-      }
-      const std::string head = PrecedingWord(body, r);
-      if (head == "else" || head == "do") return true;
-      p = r;
-      continue;
-    }
-    if (p > 0 && (body[p - 1] == ';'))
-    {
-      // A plain statement before it in the same block: keep walking out.
-      p--;
-      continue;
-    }
-    return false;
+    return false; // in the middle of a statement: nothing conditional around it
   }
   return false;
 }
@@ -683,7 +716,8 @@ std::string TranslateGeometryShaderToVertex(const std::string &source, const GsP
 }
 
 bool BuildFatGeometry(const GsProgram &gs, const void *vb, size_t vbSize, size_t stride, bool indicesAre32Bit,
-                      const void *indices, size_t indexCount, size_t firstIndex, FatGeometry &out, std::string *error)
+                      const void *indices, size_t indexCount, size_t firstIndex, int baseVertex, FatGeometry &out,
+                      std::string *error)
 {
   out = FatGeometry();
   if (!gs.ok) { if (error) *error = "the geometry shader was not accepted for emulation"; return false; }
@@ -708,8 +742,12 @@ bool BuildFatGeometry(const GsProgram &gs, const void *vb, size_t vbSize, size_t
     for (size_t i = 0; i < k; i++)
     {
       const size_t at = firstIndex + p * k + i;
-      const uint32_t vx = !indices ? (uint32_t)at
-                                   : (indicesAre32Bit ? ((const uint32_t *)indices)[at] : (uint32_t)((const uint16_t *)indices)[at]);
+      // D3D11 adds BaseVertexLocation to every index before it fetches; do the
+      // same here rather than making the caller fold it into `vb`.
+      const uint32_t raw = !indices ? (uint32_t)at
+                                    : (indicesAre32Bit ? ((const uint32_t *)indices)[at]
+                                                       : (uint32_t)((const uint16_t *)indices)[at]);
+      const uint32_t vx = raw + (uint32_t)baseVertex;
       const size_t offset = (size_t)vx * stride;
       if (offset + stride > vbSize)
       {

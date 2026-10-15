@@ -76,9 +76,12 @@ struct FatGeometry
 // `indices` starting at `firstIndex`, or, when `indices` is null, the vertices
 // are taken sequentially (D3D11's non-indexed Draw, which is how the engine
 // draws particles).  `stride` is the original vertex stride and `vb`/`vbSize`
-// the buffer the indices point into.  Only 16/32-bit indices and
-// triangle/line/point lists are accepted.
+// the buffer the indices point into.  `baseVertex` is D3D11's
+// BaseVertexLocation: it is added to every index, exactly as the input
+// assembler does, so the caller must NOT pre-offset `vb` by it as well.  Only
+// 16/32-bit indices and triangle/line/point lists are accepted.
 bool BuildFatGeometry(const GsProgram &gs, const void *vb, size_t vbSize, size_t stride, bool indicesAre32Bit,
-                      const void *indices, size_t indexCount, size_t firstIndex, FatGeometry &out, std::string *error);
+                      const void *indices, size_t indexCount, size_t firstIndex, int baseVertex, FatGeometry &out,
+                      std::string *error);
 
 } // namespace phxvk
