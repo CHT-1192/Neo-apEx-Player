@@ -112,7 +112,8 @@ static void Usage(const char *argv0)
           "                       0 disables it).  A hung frame would otherwise take\n"
           "                       the whole desktop with it.\n"
           "  --validate           enable Vulkan validation layers\n"
-          "  --dump-frame N=FILE  write frame N to FILE as binary PPM (repeatable)\n",
+          "  --dump-frame N=FILE  write frame N to FILE as binary PPM (repeatable)\n"
+          "  --dump-frame loading=FILE  write the first loading-screen frame\n",
           argv0);
 }
 
@@ -161,7 +162,11 @@ static bool ParseArgs(int argc, char **argv, Options &o)
         return false;
       }
       phxplayer::FrameDumpRequest r;
-      r.frame = atoll(std::string(spec, eq - spec).c_str());
+      const std::string what(spec, eq - spec);
+      if (what == "loading")
+        r.loading = true;
+      else
+        r.frame = atoll(what.c_str());
       r.path = eq + 1;
       o.dumps.push_back(r);
     }
@@ -269,6 +274,16 @@ private:
 };
 
 
+// CString::GetPointer() returns the buffer, and CString::Initialize() sets that
+// buffer to NULL (BaseLib/String.cpp:3-10), so an empty CString -- a project
+// with no <songfile>, an empty <Title> -- hands back a null pointer.  Building
+// a std::string straight from it is undefined behaviour, and Precalc.apx, which
+// has no <songfile> at all, died on it inside main before rendering a frame.
+static std::string CStringToStd(const TCHAR *text)
+{
+  return text ? std::string(text) : std::string();
+}
+
 static std::string ResolveSongPath(const std::string &apxPath, const std::string &declared)
 {
   std::string s = declared;
@@ -307,8 +322,8 @@ static void ReadProjectStrings(const std::string &path, phxplayer::SetupInfo *in
     return;
   }
 
-  if (root.GetChildCount((TCHAR *)"Title")) info->title = root.GetChild((TCHAR *)"Title").GetText().GetPointer();
-  if (root.GetChildCount((TCHAR *)"Group")) info->group = root.GetChild((TCHAR *)"Group").GetText().GetPointer();
+  if (root.GetChildCount((TCHAR *)"Title")) info->title = CStringToStd(root.GetChild((TCHAR *)"Title").GetText().GetPointer());
+  if (root.GetChildCount((TCHAR *)"Group")) info->group = CStringToStd(root.GetChild((TCHAR *)"Group").GetText().GetPointer());
 }
 // Which of the embedded loading-screen projects this one gets.  apExRoot.cpp's
 // release build makes the same choice from the same two flags:
@@ -791,7 +806,7 @@ int main(int argc, char **argv)
   {
     // CapexProject keeps the parsed <songfile>; the accessor name differs from
     // the member, so go through the public one.
-    songPath = ResolveSongPath(opt.project, Project.SongFile.GetPointer());
+    songPath = ResolveSongPath(opt.project, CStringToStd(Project.SongFile.GetPointer()));
   }
 
   phxplayer::MvmInfo song;
@@ -932,6 +947,26 @@ int main(int argc, char **argv)
             PrecalcProject.Timeline.Render(pos * 1000.0f, false, false);
             precalcFrames++;
             phxDepthBufferView = demoDepthView;
+            // The loading screen is only on the back buffer between Render()
+            // and Present(), so a "loading=path" dump has to happen here.  One
+            // frame is written, halfway through the load: before that the
+            // generator has produced nothing to show, and after it the loading
+            // project's timeline is over.
+            for (auto &d : opt.dumps)
+            {
+              if (!d.loading || d.done || pos < 0.5f) continue;
+              d.done = true;
+              std::string err;
+              CphxRenderTarget *target = PrecalcProject.Timeline.Target;
+              if (target && target->Texture)
+              {
+                const std::string rt = d.path + ".target.ppm";
+                if (!phxplayer::DumpTextureToPPM(target->Texture, rt.c_str(), &err))
+                  phxvk::LogError("--dump-frame loading (target) failed: %s", err.c_str());
+              }
+              if (!phxplayer::DumpBackBufferToPPM(d.path.c_str(), &err))
+                phxvk::LogError("--dump-frame loading failed: %s", err.c_str());
+            }
             if (SwapChain) SwapChain->Present(0, 0);
             SDL_PumpEvents();
           }

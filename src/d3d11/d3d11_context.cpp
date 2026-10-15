@@ -3,11 +3,14 @@
 #include "d3d11_internal.h"
 
 #include "rhi/gs_emulation.h"
+#include "rhi/shader_interface.h"
 
 #include "dxgi_formats.h"
 
 #include <algorithm>
 #include <cstdio>
+#include <set>
+#include <utility>
 
 namespace phxd3d11
 {
@@ -1044,6 +1047,49 @@ static VkPrimitiveTopology EmulatedTopology(const EmulatedGeometryShader *plan)
   return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
 }
 
+// D3D11 links a vertex and pixel shader by signature, so a pixel shader may
+// read fewer components than the vertex stage wrote (and more, reading the
+// rest as 0).  Vulkan links them by location with an exact type match, so
+// NormaliseVaryings() widens both sides to four components before either
+// module reaches vkCreateShaderModule.  This reports once per distinct pair
+// what the two stages actually declared: a width that had to be papered over
+// is the mismatch that used to fail the pipeline outright, and a location the
+// pixel shader reads that the vertex stage never writes is the one thing no
+// widening can fix.
+void ReportVaryingDisagreement(const ShaderCommon *vs, const ShaderCommon *ps)
+{
+  std::vector<phxvk::StageVarying> outputs, inputs;
+  std::string why;
+  if (!phxvk::ReadStageVaryings(vs->spirv.data(), vs->spirv.size(), phxvk::ShaderStage::Vertex, &outputs, &why)) return;
+  if (!phxvk::ReadStageVaryings(ps->spirv.data(), ps->spirv.size(), phxvk::ShaderStage::Pixel, &inputs, &why)) return;
+
+  std::string detail;
+  for (const phxvk::StageVarying &in : inputs)
+  {
+    const phxvk::StageVarying *out = nullptr;
+    for (const phxvk::StageVarying &o : outputs)
+      if (o.location == in.location) { out = &o; break; }
+
+    char line[128];
+    if (!out)
+      snprintf(line, sizeof line, "location %u: pixel reads %u, vertex never writes it; ", in.location, in.components);
+    else if (out->components != in.components)
+      snprintf(line, sizeof line, "location %u: vertex writes %u, pixel reads %u; ",
+               in.location, out->components, in.components);
+    else
+      continue;
+    detail += line;
+  }
+  if (detail.empty()) return;
+
+  static std::set<std::pair<uint64_t, uint64_t>> seen;
+  if (!seen.insert({vs->contentHash, ps->contentHash}).second) return;
+  if (seen.size() > 24) return;
+  phxvk::LogInfo("[d3d11] vertex/pixel interface disagreement widened to four components: %s"
+                 "(D3D11 links by signature, Vulkan by location -- see src/rhi/shader_interface.h)",
+                 detail.c_str());
+}
+
 // The geometry shader the pipeline is about to drop, if one can be reproduced
 // instead.  Null whenever there is nothing to emulate, which is the common case.
 const EmulatedGeometryShader *ContextImpl::EmulationPlanFor(const ShaderCommon *gs) const
@@ -1179,6 +1225,15 @@ bool ContextImpl::PrepareDraw(VkPipeline *outPipeline, VkPipelineLayout *outLayo
     ci.pName = shader->entryPoint.c_str();
     stagesCi.push_back(ci);
   };
+  // D3D11 links these two by signature and Vulkan by location, so say once per
+  // pair what the vertex stage declared against what the pixel stage reads.
+  // NormaliseVaryings() has already widened both sides to four components by
+  // the time the pipeline is built, so a disagreement reported here is one
+  // this port had to paper over -- and a location the pixel shader reads that
+  // the vertex shader never writes is one it cannot.
+  if (stages[kStageVS].shader && stages[kStagePS].shader)
+    ReportVaryingDisagreement((emuVs ? static_cast<const ShaderCommon *>(emuVs) : stages[kStageVS].shader),
+                              stages[kStagePS].shader);
   addStage(VK_SHADER_STAGE_VERTEX_BIT, kStageVS);
   // MoltenVK/Metal has no geometry shader stage, so the stage is dropped and
   // the pipeline runs vertex -> fragment only.  This is NOT cosmetic: in

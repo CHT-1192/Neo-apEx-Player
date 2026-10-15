@@ -23,10 +23,19 @@ bool DumpBackBufferToPPM(const char *path, std::string *error);
 // separates "the events drew nothing" from "the final blit is broken").
 bool DumpTextureToPPM(ID3D11Texture2D *texture, const char *path, std::string *error);
 
-// "N=path" specs parsed from --dump-frame.
+// "N=path" specs parsed from --dump-frame, plus "loading=path" for the loading
+// screen.  The loading screen is presented from inside the resource-generation
+// loop rather than from the demo's frame loop, so it cannot be reached by frame
+// number -- and it is a thing this port has repeatedly got wrong, so it has to
+// be capturable.  The frame written is the first one at or past the middle of
+// the load: the early loading frames are presented before the generator has
+// produced anything, and the last one is past the end of the loading project's
+// timeline, so neither of those says anything.
 struct FrameDumpRequest
 {
   long long frame = 0;
+  bool loading = false; // "loading=path"
+  bool done = false;
   std::string path;
 };
 

@@ -38,6 +38,7 @@ behind both APIs.
 | D3D11 register -> Vulkan binding mapping | `$Globals`(c0,c1) -> binding 0; `tN` -> 64+N; `sN` -> 192+N; `bN` -> N (verified by reflection) |
 | Bedrock/BaseLib compiles | 28/32 files; the 4 excluded ones are Windows-only (Socket, CrashTracker, StackTracker, ImageDecompressor - all replaced) |
 | Song clock | `.mvm` header parser reproduces the original timeline exactly: step010 = 275.90 s, step010padding = 284.44 s (the padding variant is what `cleanslate.apx` names) |
+| All 8 bundled projects | 11 `.apx` files across Clean Slate, Darkness Lay Your Eyes Upon Me, Offscreen Colonies, One of These Days The Sky's Gonna Break, Supermode, Universal Sequence, Vessel and When Silence Dims the Stars Above all load and render; 0 pipeline-creation failures each (MILESTONE 9) |
 
 ## Key facts that constrain the implementation
 
@@ -56,6 +57,95 @@ behind both APIs.
   zero); 32-bit indices.
 * Mesh text generation uses Windows GDI glyph outlines + the GLU tessellator;
   macOS provides GLU via the OpenGL framework (verified to build and run).
+
+## MILESTONE 9: D3D11 links shaders by signature, Vulkan links them by location
+
+Running the other bundled projects rather than only Clean Slate turned up a
+pipeline that could not be created in **10 of the 11 of them**:
+
+```
+[phxvk error] validation: VK_ERROR_INITIALIZATION_FAILED: Render pipeline compile failed:
+Fragment input(s) `user(locn0)` mismatching vertex shader output type(s) or not written by vertex shader.
+[phxvk error] vkCreateGraphicsPipelines failed: VK_ERROR_INITIALIZATION_FAILED (topology 4, 1 RTs, depth 0)
+```
+
+**Geometry shaders are not involved**, which is worth recording because that is
+where the search goes first. Over all 11 projects the same audit finds exactly
+one failing pipeline per project, always the same shader pair and always with
+`emu=0`: the engine's own 2D quad vertex shader (`shader[]` in
+`Phoenix/phxEngine.cpp:149`, entry point `u`) writing `float2 texcoord0`, against
+a texture-generator or loading-screen pixel shader that declares
+`float4 texcoord0`. The three geometry-shader pipelines that exist outside Clean
+Slate (two in Universal Sequence, one in Clean Slate) all emulate, none are
+refused, and none fail. `--validate` gives the pair's identity directly.
+
+D3D11 links a draw's shaders by **signature**: the pixel shader's input
+signature is matched against the vertex shader's output signature by semantic
+name and index, and a component the vertex shader never wrote reads as 0 (and
+`.w` as 1). A pixel shader declaring `float4 uv : TEXCOORD0` is therefore
+perfectly happy with a vertex shader that wrote `float2 uv : TEXCOORD0`. Vulkan
+links by **location** and requires the same type on both sides, so SPIRV-Cross
+refuses the pipeline and the draw is dropped.
+
+`src/rhi/shader_interface.cpp` lowers the D3D11 rule onto Vulkan: every
+floating point or integer varying a stage declares is widened to four
+components, padding what the shader did not write exactly as D3D11 reads it.
+Four components on both sides always match, and it is what a D3D11 signature
+register is anyway -- four components plus a write mask, and Vulkan has no mask.
+It runs once per shader at creation (`d3d11_shader.cpp`), so it does not depend
+on which vertex and pixel shader end up in the same pipeline, and it also covers
+the emulated geometry-shader vertex stage, which is created through the same
+path. A shader whose varyings are all four wide already is returned untouched,
+byte for byte.
+
+Two SPIR-V details are easy to get wrong and are what the test pins:
+
+* A varying's `OpVariable` cannot be retyped in place. SPIR-V forbids a
+  duplicate `OpTypeVector %float 4`, so the existing four component type has to
+  be reused -- and glslang interleaves each type with the variable that uses it,
+  so that type is often declared *below* the variable. The touched variables are
+  moved to the end of the types/constants/globals section, after the new types.
+* A load has to keep the type the shader body was written against, so the vec4
+  load gets a fresh id and an `OpVectorShuffle` under the *original* id narrows
+  it back; a store is preceded by an `OpCompositeConstruct`. An access chain
+  into a varying needs no change at all, because widening a `vecN` leaves
+  components `0..N-1` where they were.
+
+**The fix is pixel-neutral on everything measured**, which is the point: frames
+300, 3724 (0:31), 7920 (1:06) and 9360 (1:18) of Clean Slate, and frames 300 and
+1500 of Supermode, Offscreen Colonies and Darkness, dump byte-identically with
+and without it, against a binary built from the previous commit. What it changes
+is that the engine's texture-generator draw now happens instead of being
+dropped.
+
+`tests/shader_interface_test.cpp` compiles the real pair and checks both
+directions (a narrow vertex stage widened, a narrow pixel stage narrowed), that
+a four component shader comes back untouched, and that a stage with no varying
+interface is left alone.
+
+Two further defects found by the same sweep, and where they stand:
+
+* **`Projects/Clean Slate/Precalc.apx` segfaulted on startup**, in `main`, before
+  a frame. `CString::Initialize()` sets its buffer to `NULL`
+  (`BaseLib/String.cpp:3-10`), and a project with no `<songfile>` -- which this
+  one has none of -- handed that `NULL` to `std::string`. Fixed.
+* **The loading screen drawn *during* a load is blank** -- black for a project
+  using `precalcminimal`, uniform noise for one using `precalcphoenix_shader` --
+  although the same project renders its bar correctly when played as a demo.
+  This is pre-existing (identical with and without the change above) and is NOT
+  yet fixed. It is reproducible now: `--dump-frame loading=FILE` writes the
+  loading frame, which the frame loop's `--dump-frame N` cannot reach because
+  the loading screen is presented from inside the resource-generation loop. The
+  mechanism is `CphxEvent_Shadertoy::Render` (`Phoenix/Timeline.cpp:33-123`)
+  drawing a 6-vertex quad with the first 16 bytes of `SceneDataBuffer` set to
+  `{t, aspect, targetWidth, targetHeight}`, which is what
+  `precalcminimal`'s `cbuffer b{float4 i}` reads for the bar's length (`i.z`)
+  and its progress (`i.x`).
+
+* **`Projects/Offscreen Colonies/off0021_things.mvm` is rejected by the song
+  reader** as `degenerate tempo (tpb or bpm is zero)`, so both of that project's
+  `.apx` files run on the wall clock. Not investigated; every other bundled
+  `.mvm` parses.
 
 ## MILESTONE 8: the loading screen, and frames drawn before they were ready
 

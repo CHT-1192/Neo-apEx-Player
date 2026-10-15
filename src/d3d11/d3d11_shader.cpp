@@ -8,8 +8,10 @@
 #include <set>
 
 #include "dxgi_formats.h"
+#include "rhi/shader_interface.h"
 
 #include <cstdio>
+#include <vector>
 
 namespace phxd3d11
 {
@@ -55,9 +57,34 @@ bool BuildShaderCommon(const void *bytecode, SIZE_T length, phxvk::ShaderStage s
     return false;
   }
 
+  // D3D11 links a draw's shaders by signature and Vulkan links them by
+  // location with an exact type match, so a pixel shader reading TEXCOORD0 as
+  // `float4` against a vertex shader that wrote `float2` is a pipeline D3D11
+  // runs and Vulkan refuses outright -- 10 of the 11 bundled projects lose a
+  // generated texture to exactly that.  Widen every varying to four
+  // components, which is what a D3D11 signature register is anyway.
+  // See src/rhi/shader_interface.h.
+  //
+  // `out->spirv`, the content hash and the reflection lookup all stay on the
+  // ORIGINAL bytes: the first two are the shim's identity for the shader (the
+  // pipeline cache keys on them, and so does the geometry-shader registry),
+  // and D3DCompile registered the reflection under them.
+  const std::vector<uint32_t> original(words, words + length / sizeof(uint32_t));
+  std::vector<uint32_t> normalised;
+  std::string refusal;
+  const phxvk::NormaliseResult result = phxvk::NormaliseVaryings(original, stage, &normalised, &refusal);
+  if (result == phxvk::NormaliseResult::Refused)
+    phxvk::LogWarn("%s: a varying could not be widened to four components (%s), so this shader keeps its "
+                   "declared interface and may fail to link against a pixel shader that declares a "
+                   "wider one", what, refusal.c_str());
+
+  const std::vector<uint32_t> &forModule =
+      (result == phxvk::NormaliseResult::Rewritten) ? normalised : original;
+
   VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-  ci.codeSize = (size_t)length;
-  ci.pCode = words;
+  ci.codeSize = forModule.size() * sizeof(uint32_t);
+  ci.pCode = forModule.data();
+
   VkResult res = vkCreateShaderModule(phxvk::Vk().device, &ci, nullptr, &out->module);
   if (res != VK_SUCCESS)
   {
@@ -66,7 +93,7 @@ bool BuildShaderCommon(const void *bytecode, SIZE_T length, phxvk::ShaderStage s
   }
 
   out->stage = stage;
-  out->spirv.assign(words, words + length / sizeof(uint32_t));
+  out->spirv = original;
   out->entryPoint = SpirvEntryPointName(words, out->spirv.size());
   // Identity for the pipeline cache: identical bytecode must map to one
   // pipeline even though the engine keeps minting new shader objects.

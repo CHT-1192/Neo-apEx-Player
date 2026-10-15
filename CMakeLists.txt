@@ -51,6 +51,7 @@ add_library(phx_vk STATIC
   src/rhi/vk_core.cpp
   src/rhi/shader_compiler.cpp
   src/rhi/gs_emulation.cpp
+  src/rhi/shader_interface.cpp
 )
 target_include_directories(phx_vk PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_include_directories(phx_vk SYSTEM PUBLIC ${VULKAN_INCLUDE_DIRS} ${SHADERC_INCLUDE_DIRS})
@@ -221,6 +222,25 @@ add_executable(phx_gs_test
 )
 target_link_libraries(phx_gs_test PRIVATE phx_vk)
 target_compile_options(phx_gs_test PRIVATE -Wno-everything)
+
+# ---------------------------------------------------------------------------
+# Shader interface normalisation (src/rhi/shader_interface.cpp).
+#
+#   ./build/phx_interface_test
+#
+# Compiles the engine's own 2D quad vertex shader and the loading-screen
+# project's logo-filter pixel shader -- the pair that made
+# vkCreateGraphicsPipelines fail for 10 of the 11 bundled projects -- and checks
+# that D3D11's signature linkage is lowered to Vulkan's location linkage: the
+# vertex shader's float2 TEXCOORD0 and the pixel shader's float4 both come back
+# four components wide, a shader that needs nothing is untouched byte for byte,
+# and a stage with no varying interface is left alone.
+# Exit status == failed checks.
+add_executable(phx_interface_test
+  tests/shader_interface_test.cpp
+)
+target_link_libraries(phx_interface_test PRIVATE phx_vk)
+target_compile_options(phx_interface_test PRIVATE -Wno-everything)
 
 # ---------------------------------------------------------------------------
 # GDI-on-CoreText test (src/platform/gdi_posix.cpp).
