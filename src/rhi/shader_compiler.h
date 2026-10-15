@@ -85,6 +85,7 @@ struct GeometryShaderInfo
   std::string inputPrimitive; // "point", "line", "triangle", "lineadj", "triangleadj"
   int inputVertices = 0;      // vertices the input primitive carries (1, 2, 3, ...)
   int maxVertexCount = 0;     // the [maxvertexcount(N)] attribute
+  std::string inputType;      // the element type the vertex shader produced
   std::string outputStream;   // "TriangleStream", "PointStream", "LineStream"
   std::string outputType;     // the stream's element type
   int appends = 0;            // OutputStream.Append(...) call sites

@@ -46,6 +46,7 @@ struct GsProgram
   std::string reason;      // why not, when !ok
   int slots = 0;           // vertices emitted per input primitive (maxvertexcount)
   int inputVertices = 0;   // K: vertices the input primitive carries
+  std::string inputType;   // the element type the vertex shader produced
   std::string outputStream; // "TriangleStream", "LineStream" or "PointStream"
   // Whether emitted vertices are joined into strips, so that input primitives
   // and RestartStrips have to be separated by a restart index.  A PointStream

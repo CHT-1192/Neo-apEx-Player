@@ -272,6 +272,137 @@ CallScan ScanBody(const std::string &body)
 
 } // namespace
 
+
+std::string PrecedingWord(const std::string &body, size_t at);
+bool IsInsideConditional(const std::string &body, size_t at);
+
+// True when a RestartStrip sits somewhere that may not execute -- the body of a
+// braceless if/for/while, or inside a brace block opened by one -- and an Append
+// follows it.  Only then is the static strip layout a guess.
+bool ConditionalRestartFollowedByAppend(const std::string &body)
+{
+  for (size_t at = body.find("RestartStrip"); at != std::string::npos; at = body.find("RestartStrip", at + 1))
+  {
+    if (body.find("Append", at) == std::string::npos) continue; // nothing after it
+    if (!IsInsideConditional(body, at)) continue;
+    return true;
+  }
+  return false;
+}
+
+// Walks outwards from `at` through the enclosing blocks, asking whether any of
+// them is a conditional or loop body.
+bool IsInsideConditional(const std::string &body, size_t at)
+{
+  size_t p = at;
+  // `OutputStream.RestartStrip()`: step back over the receiver so the walk
+  // starts at the statement, not in the middle of an identifier.
+  {
+    while (p > 0 && (body[p - 1] == ' ' || body[p - 1] == '\t')) p--;
+    if (p > 0 && body[p - 1] == '.')
+    {
+      p--;
+      while (p > 0 && IsIdentChar(body[p - 1])) p--;
+    }
+  }
+  for (int guard = 0; guard < 16; guard++)
+  {
+    // Back up over whitespace and at most one statement terminator.
+    while (p > 0 && (body[p - 1] == ' ' || body[p - 1] == '\t' || body[p - 1] == '\n' || body[p - 1] == '\r')) p--;
+    if (p > 0 && body[p - 1] == ')')
+    {
+      // `if (...) RestartStrip();` -- braceless.
+      int depth = 0;
+      size_t q = p;
+      while (q > 0)
+      {
+        q--;
+        if (body[q] == ')') depth++;
+        else if (body[q] == '(' && --depth == 0) break;
+      }
+      const std::string head = PrecedingWord(body, q);
+      if (head == "if" || head == "for" || head == "while" || head == "switch") return true;
+      p = q;
+      continue;
+    }
+    if (p > 0 && body[p - 1] == '}')
+    {
+      // `} else {` ... find the matching '{' and look at what opens it.
+      int depth = 0;
+      size_t q = p;
+      while (q > 0)
+      {
+        q--;
+        if (body[q] == '}') depth++;
+        else if (body[q] == '{' && --depth == 0) break;
+      }
+      p = q;
+      // What is in front of the '{'?
+      size_t r = p;
+      while (r > 0 && (body[r - 1] == ' ' || body[r - 1] == '\t' || body[r - 1] == '\n' || body[r - 1] == '\r')) r--;
+      if (r > 0 && body[r - 1] == ')')
+      {
+        int d2 = 0;
+        size_t q2 = r;
+        while (q2 > 0)
+        {
+          q2--;
+          if (body[q2] == ')') d2++;
+          else if (body[q2] == '(' && --d2 == 0) break;
+        }
+        const std::string head = PrecedingWord(body, q2);
+        if (head == "if" || head == "for" || head == "while" || head == "switch" || head == "else") return true;
+        p = q2;
+        continue;
+      }
+      const std::string head = PrecedingWord(body, r);
+      if (head == "else" || head == "do") return true;
+      p = r;
+      continue;
+    }
+    if (p > 0 && (body[p - 1] == ';'))
+    {
+      // A plain statement before it in the same block: keep walking out.
+      p--;
+      continue;
+    }
+    return false;
+  }
+  return false;
+}
+
+std::string PrecedingWord(const std::string &body, size_t at)
+{
+  size_t p = at;
+  while (p > 0 && (body[p - 1] == ' ' || body[p - 1] == '\t' || body[p - 1] == '\n' || body[p - 1] == '\r')) p--;
+  const size_t end = p;
+  while (p > 0 && IsIdentChar(body[p - 1])) p--;
+  return body.substr(p, end - p);
+}
+
+// The name of a system value in the parameter list that the emulation cannot
+// supply, or an empty string.
+std::string UnsupportedSystemValue(const std::string &params)
+{
+  for (size_t at = params.find(": SV_"); at != std::string::npos; at = params.find(": SV_", at + 1))
+  {
+    size_t p = at + 2;
+    while (p < params.size() && (params[p] == ' ' || params[p] == '\t')) p++;
+    const size_t start = p;
+    while (p < params.size() && IsIdentChar(params[p])) p++;
+    const std::string semantic = params.substr(start, p - start);
+    if (semantic != "SV_PrimitiveID" && semantic != "SV_GSInstanceID")
+    {
+      size_t q = at;
+      while (q > 0 && (params[q - 1] == ' ' || params[q - 1] == '\t')) q--;
+      const size_t nameEnd = q;
+      while (q > 0 && IsIdentChar(params[q - 1])) q--;
+      return params.substr(q, nameEnd - q) + " : " + semantic;
+    }
+  }
+  return std::string();
+}
+
 GsProgram AnalyseGeometryShader(const std::string &source, const char *gsEntry, const char *vertexEntry, const GeometryShaderInfo &shape)
 {
   GsProgram gs;
@@ -288,6 +419,7 @@ GsProgram AnalyseGeometryShader(const std::string &source, const char *gsEntry, 
   gs.strips = (shape.outputStream != "PointStream");
 
   gs.inputVertices = shape.inputVertices;
+  gs.inputType = shape.inputType;
   if (gs.inputVertices != 1 && gs.inputVertices != 2 && gs.inputVertices != 3 && gs.inputVertices != 4 && gs.inputVertices != 6)
   {
     gs.reason = "input primitive is not point/line/triangle (with or without adjacency)";
@@ -303,19 +435,55 @@ GsProgram AnalyseGeometryShader(const std::string &source, const char *gsEntry, 
 
   const CallScan scan = ScanBody(gsBody);
   if (scan.unknown) { gs.reason = "a RestartStrip sits in a loop whose trip count is not a literal"; return gs; }
-  if (scan.appends == 0) { gs.reason = "the geometry shader appends nothing"; return gs; }
-  if (scan.appends > shape.maxVertexCount) { gs.reason = "more Append calls than maxvertexcount allows"; return gs; }
+  if (scan.appends == 0)
+  {
+    // The scan reads the source before the preprocessor has run, so an Append
+    // written through a macro is invisible to it.  Say that, rather than
+    // claiming the shader appends nothing.
+    gs.reason = (source.find("#define") != std::string::npos && source.find("Append") != std::string::npos)
+                    ? "no Append call is visible to a text scan -- if the Append is written through a #define, "
+                      "the emulation cannot see it"
+                    : "the geometry shader appends nothing";
+    return gs;
+  }
+  if (scan.appends > shape.maxVertexCount)
+  {
+    gs.reason = "more Append calls than maxvertexcount allows (counted statically, so Appends in mutually "
+                "exclusive branches are added together)";
+    return gs;
+  }
+
+  // A RestartStrip that may not run, with an Append after it, cannot be drawn:
+  // the index buffer's primitive restarts are decided here, statically, and a
+  // restart that the stream does not take -- or takes somewhere else -- would
+  // join triangles the geometry shader kept apart, or split ones it joined.
+  // (Clean Slate's wireframe has a conditional RestartStrip as its last
+  // statement, which is fine: nothing can follow it.)
+  if (ConditionalRestartFollowedByAppend(gsBody))
+  {
+    gs.reason = "a RestartStrip inside a branch is followed by more Appends, so the strip layout is only known "
+                "at run time";
+    return gs;
+  }
+
+  // System-value inputs the emulated stage cannot supply.  SV_PrimitiveID and
+  // SV_GSInstanceID it can (see TranslateGeometryShaderToVertex); anything else
+  // has to be refused here, by name, rather than left as an identifier the
+  // generated stage never defines.
+  {
+    const std::string bad = UnsupportedSystemValue(gsParams);
+    if (!bad.empty())
+    {
+      gs.reason = "the geometry shader takes " + bad + ", which the emulation cannot supply";
+      return gs;
+    }
+  }
 
   // The output element type must expose a Position member: that is what the
   // emulation has to overwrite to collapse unused slots into nothing.
-  size_t p = gsParams.find("inout");
-  std::string outType;
-  if (p != std::string::npos)
-  {
-    const size_t lt = gsParams.find('<', p);
-    const size_t gt = (lt == std::string::npos) ? std::string::npos : gsParams.find('>', lt);
-    if (lt != std::string::npos && gt != std::string::npos) outType = gsParams.substr(lt + 1, gt - lt - 1);
-  }
+  // From the shape reader, which trims: `TriangleStream < VSOUT >` is legal
+  // HLSL and re-reading the angle brackets here kept the spaces.
+  const std::string outType = shape.outputType;
   if (outType.empty()) { gs.reason = "no output element type"; return gs; }
 
   const size_t structAt = source.find("struct " + outType);
@@ -338,6 +506,33 @@ GsProgram AnalyseGeometryShader(const std::string &source, const char *gsEntry, 
   return gs;
 }
 
+
+// Locals standing in for the geometry shader's system-value parameters, which
+// the emulated stage is not handed.
+std::string SystemValueLocals(const std::string &params, int slots)
+{
+  std::string out;
+  for (size_t at = params.find(": SV_"); at != std::string::npos; at = params.find(": SV_", at + 1))
+  {
+    size_t p = at + 2;
+    while (p < params.size() && (params[p] == ' ' || params[p] == '\t')) p++;
+    const size_t start = p;
+    while (p < params.size() && IsIdentChar(params[p])) p++;
+    const std::string semantic = params.substr(start, p - start);
+    size_t q = at;
+    while (q > 0 && (params[q - 1] == ' ' || params[q - 1] == '\t')) q--;
+    const size_t nameEnd = q;
+    while (q > 0 && IsIdentChar(params[q - 1])) q--;
+    const std::string name = params.substr(q, nameEnd - q);
+    if (name.empty()) continue;
+    if (semantic == "SV_PrimitiveID")
+      out += "  uint " + name + " = gsemu_vid / " + std::to_string(slots) + "u;\n";
+    else if (semantic == "SV_GSInstanceID")
+      out += "  uint " + name + " = 0u;\n";
+  }
+  return out;
+}
+
 std::string TranslateGeometryShaderToVertex(const std::string &source, const GsProgram &gs, const char *gsEntry, const char *vertexEntry, const char *packedInputName)
 {
   if (!gs.ok) return std::string();
@@ -353,12 +548,13 @@ std::string TranslateGeometryShaderToVertex(const std::string &source, const GsP
   const std::string vsInputType = FirstParameterType(vsParams);
   if (vsInputType.empty()) return std::string();
 
-  // The type the geometry shader reads from the vertex shader.
+  // The type the geometry shader reads from the vertex shader.  The shape
+  // reader already worked it out -- including the case where HLSL's optional
+  // primitive modifier is left out, which reading the parameter list here used
+  // to get wrong (it took the parameter *name* for the type).
   size_t p = gsParams.find("inout");
   const std::string inPart = (p == std::string::npos) ? gsParams : gsParams.substr(0, p);
-  size_t q = 0;
-  const std::string primitiveWord = ReadIdent(inPart, q);
-  const std::string stageType = ReadIdent(inPart, q);
+  const std::string stageType = gs.inputType;
   if (stageType.empty()) return std::string();
 
   // The name the geometry shader gives its input array.  The generated vertex
@@ -400,7 +596,11 @@ std::string TranslateGeometryShaderToVertex(const std::string &source, const GsP
     size_t q = at;
     while (q > 0 && (body[q - 1] == ' ' || body[q - 1] == '\t')) q--;
     if (q == 0 || body[q - 1] != '.') return;
-    size_t r = q - 1;
+    size_t r = q - 1; // the '.'
+    // `o . Append(...)` is legal HLSL, so skip the whitespace on both sides of
+    // the dot before looking for the receiver's name -- skipping only the space
+    // before it left the `o` behind and produced `o { if (...) return ... }`.
+    while (r > 0 && (body[r - 1] == ' ' || body[r - 1] == '\t')) r--;
     while (r > 0 && IsIdentChar(body[r - 1])) r--;
     const size_t prefix = at - r;
     if (out.size() >= prefix) out.resize(out.size() - prefix);
@@ -463,6 +663,12 @@ std::string TranslateGeometryShaderToVertex(const std::string &source, const GsP
     out += "  " + inputName + "[" + std::to_string(i) + "] = " + vertexEntry + "( gsemu_packed.a" + std::to_string(i) + " );\n";
   out += "  const uint gsemu_slot = gsemu_vid % " + std::to_string(gs.slots) + "u;\n";
   out += "  uint gsemu_at = 0u;\n";
+  // Geometry shader system-value inputs.  The emulation draws one input
+  // primitive as `slots` consecutive vertices, so the primitive index is
+  // gsemu_vid / slots; there is no geometry shader instancing here, so
+  // SV_GSInstanceID is 0.  AnalyseGeometryShader() has already refused any
+  // other system value, so anything left is one of these two.
+  out += SystemValueLocals(gsParams, gs.slots);
   out += "  " + outType + " gsemu_out;\n";
   out += "  {\n";
   out += translated;
@@ -473,7 +679,6 @@ std::string TranslateGeometryShaderToVertex(const std::string &source, const GsP
   out += "  gsemu_dead.Position = float4( 0, 0, 0, 0 );\n";
   out += "  return gsemu_dead;\n";
   out += "}\n";
-  (void)primitiveWord;
   return out;
 }
 

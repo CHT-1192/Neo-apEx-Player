@@ -878,6 +878,29 @@ int CountCalls(const std::string &body, const char *name)
 
 } // namespace
 
+static bool IsPrimitiveWord(const std::string &w)
+{
+  return w == "point" || w == "line" || w == "triangle" || w == "lineadj" || w == "triangleadj";
+}
+
+static int PrimitiveVertexCount(const std::string &w)
+{
+  if (w == "point") return 1;
+  if (w == "line") return 2;
+  if (w == "triangle") return 3;
+  if (w == "lineadj") return 4;
+  if (w == "triangleadj") return 6;
+  return 0;
+}
+
+static std::string Trim(const std::string &s)
+{
+  size_t a = 0, b = s.size();
+  while (a < b && (s[a] == ' ' || s[a] == '\t' || s[a] == '\n' || s[a] == '\r')) a++;
+  while (b > a && (s[b - 1] == ' ' || s[b - 1] == '\t' || s[b - 1] == '\n' || s[b - 1] == '\r')) b--;
+  return s.substr(a, b - a);
+}
+
 GeometryShaderInfo DescribeGeometryShader(const char *source, size_t length, const char *entryPoint)
 {
   GeometryShaderInfo info;
@@ -897,17 +920,32 @@ GeometryShaderInfo DescribeGeometryShader(const char *source, size_t length, con
     const size_t inout = params.find("inout");
     const std::string in = (inout == std::string::npos) ? params : params.substr(0, inout);
 
-    size_t p = 0;
-    while (p < in.size() && !IsIdentChar(in[p])) p++;
-    const size_t wordStart = p;
-    while (p < in.size() && IsIdentChar(in[p])) p++;
-    info.inputPrimitive = in.substr(wordStart, p - wordStart);
-
-    if (info.inputPrimitive == "point") info.inputVertices = 1;
-    else if (info.inputPrimitive == "line") info.inputVertices = 2;
-    else if (info.inputPrimitive == "triangle") info.inputVertices = 3;
-    else if (info.inputPrimitive == "lineadj") info.inputVertices = 4;
-    else if (info.inputPrimitive == "triangleadj") info.inputVertices = 6;
+    // The input type and its name, then the primitive modifier if there is
+    // one: HLSL lets it be left out, in which case the input is a triangle.
+    // Read as "type name" first, so `VSOUT i[3]` and `triangle VSOUT i[3]`
+    // both work; the modifier, when present, comes first and pushes the pair
+    // along by one word.
+    std::vector<std::string> words;
+    for (size_t p = 0; p < in.size();)
+    {
+      while (p < in.size() && !IsIdentChar(in[p])) p++;
+      const size_t start = p;
+      while (p < in.size() && IsIdentChar(in[p])) p++;
+      if (p > start) words.push_back(in.substr(start, p - start));
+    }
+    size_t word = 0;
+    if (word < words.size() && IsPrimitiveWord(words[word]))
+    {
+      info.inputPrimitive = words[word++];
+      info.inputVertices = PrimitiveVertexCount(info.inputPrimitive);
+    }
+    else
+    {
+      // No modifier: the default, and the only one HLSL defaults to.
+      info.inputPrimitive = "triangle";
+      info.inputVertices = 3;
+    }
+    if (word < words.size()) info.inputType = words[word];
 
     if (inout != std::string::npos)
     {
@@ -915,7 +953,8 @@ GeometryShaderInfo DescribeGeometryShader(const char *source, size_t length, con
       const size_t gt = (lt == std::string::npos) ? std::string::npos : params.find('>', lt);
       if (lt != std::string::npos && gt != std::string::npos)
       {
-        info.outputType = params.substr(lt + 1, gt - lt - 1);
+        // `TriangleStream < VSOUT > o` is legal HLSL: trim what is inside.
+        info.outputType = Trim(params.substr(lt + 1, gt - lt - 1));
         size_t q = inout + 5;
         while (q < lt && !IsIdentChar(params[q])) q++;
         const size_t s2 = q;

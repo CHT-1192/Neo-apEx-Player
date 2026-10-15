@@ -636,6 +636,130 @@ void g(triangle VSOUT i[3], inout TriangleStream<VSOUT> o)
 """,
 }
 
+
+# --------------------------------------------------------------------------
+# Weird but LEGAL geometry shader constructs.  Invalid HLSL is covered by the
+# gs-append-* / gs-input-* cases above; what is interesting here is the shader
+# that compiles fine and still trips the emulator, because the emulator reads
+# the ORIGINAL SOURCE TEXT (So the preprocessor has not run) and decides the
+# index buffer's strip layout by STATIC analysis of RestartStrip.
+
+GS_WEIRD = {
+    # The preprocessor runs after the emulator has already read the source, so
+    # a macro'd Append is invisible to it.
+    "gs-weird-define-append": r"""
+#define AP(x) o.Append(x)
+#define RS()  o.RestartStrip()
+[maxvertexcount(6)]
+void g(triangle VSOUT i[3], inout TriangleStream<VSOUT> o)
+{
+	AP(i[0]); AP(i[1]); AP(i[2]);
+	RS();
+	AP(i[0]); AP(i[2]); AP(i[1]);
+}
+""",
+    # The primitive modifier is optional in HLSL; the emulator's parameter
+    # parser expects it.
+    "gs-weird-no-primitive-modifier": r"""
+[maxvertexcount(3)]
+void g(VSOUT i[3], inout TriangleStream<VSOUT> o)
+{
+	o.Append(i[0]); o.Append(i[1]); o.Append(i[2]);
+}
+""",
+    # A RestartStrip whose branch is never taken.  The emulator decides the
+    # index buffer's primitive restarts statically, so it will lay one down
+    # even though the stream never restarts: 6 vertices in one strip (four
+    # triangles) becomes two strips of three (two triangles).
+    "gs-weird-restart-never-taken": r"""
+[maxvertexcount(6)]
+void g(triangle VSOUT i[3], inout TriangleStream<VSOUT> o)
+{
+	o.Append(i[0]); o.Append(i[1]); o.Append(i[2]);
+	if (i[0].p.x > 1.0e9) o.RestartStrip();
+	o.Append(i[0]); o.Append(i[2]); o.Append(i[1]);
+}
+""",
+    # ...and the harmless mirror image, where the branch IS taken, so the two
+    # together separate "the layout is static" from "the layout is wrong".
+    "gs-weird-restart-always-taken": r"""
+[maxvertexcount(6)]
+void g(triangle VSOUT i[3], inout TriangleStream<VSOUT> o)
+{
+	o.Append(i[0]); o.Append(i[1]); o.Append(i[2]);
+	if (i[0].p.x > -1.0e9) o.RestartStrip();
+	o.Append(i[0]); o.Append(i[2]); o.Append(i[1]);
+}
+""",
+    # Whitespace inside the attribute, the parameter list and the template.
+    "gs-weird-odd-spacing": r"""
+[ maxvertexcount ( 3 ) ]
+void g ( triangle VSOUT i [ 3 ] , inout TriangleStream < VSOUT > o )
+{
+	o . Append ( i [ 0 ] ) ;
+	o.Append(i[1]);
+	o.Append(i[2]);
+}
+""",
+    # Sampling a texture inside the geometry shader: the emulated vertex stage
+    # has to end up with the same descriptor bindings.
+    "gs-weird-samples-texture": r"""
+[maxvertexcount(3)]
+void g(triangle VSOUT i[3], inout TriangleStream<VSOUT> o)
+{
+	[unroll] for (int k=0;k<3;k++)
+	{
+		VSOUT r=i[k];
+		r.uv += t_0.SampleLevel(Sampler, i[k].uv, 0).xy * 0.001;
+		o.Append(r);
+	}
+}
+""",
+    # Two more system values, one of which is geometry-shader-only.
+    "gs-weird-system-values": r"""
+[maxvertexcount(3)]
+void g(triangle VSOUT i[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInstanceID,
+       inout TriangleStream<VSOUT> o)
+{
+	[unroll] for (int k=0;k<3;k++)
+	{
+		VSOUT r=i[k];
+		r.uv += ((float)(pid & 1) + (float)inst) * 0.0;
+		o.Append(r);
+	}
+}
+""",
+    # The body calls a function the vertex shader also uses.
+    "gs-weird-shares-helper-with-vs": r"""
+VSOUT gshelper(VSOUT a)
+{
+	VSOUT r=a;
+	r.uv+=float2(0.001,0.001);
+	return r;
+}
+
+[maxvertexcount(3)]
+void g(triangle VSOUT i[3], inout TriangleStream<VSOUT> o)
+{
+	[unroll] for (int k=0;k<3;k++) o.Append(gshelper(i[k]));
+}
+""",
+    # Appends guarded by a switch.
+    "gs-weird-switch": r"""
+[maxvertexcount(3)]
+void g(triangle VSOUT i[3], inout TriangleStream<VSOUT> o)
+{
+	int which = (int)fmod(abs(i[0].uv.x) * 4.0, 3.0);
+	switch (which)
+	{
+	case 0: o.Append(i[0]); o.Append(i[1]); o.Append(i[2]); break;
+	case 1: o.Append(i[1]); o.Append(i[2]); o.Append(i[0]); break;
+	default: o.Append(i[2]); o.Append(i[0]); o.Append(i[1]); break;
+	}
+}
+""",
+}
+
 # Structs and helper functions the GS cases above refer to.
 GS_SUPPORT = r"""
 struct GSOUTN
@@ -1289,6 +1413,12 @@ float4 d(HSCTRL c, float3 bary : SV_DomainLocation)
             "gs-hs-ds-too": "GS plus hull/domain stages on a device with neither",
         }.get(name, "emulated")
         cases.append((name, desc, expect,
+                      lambda xml, c=code, t=tech: replace_code(xml, t, c)))
+
+    for name, gs in GS_WEIRD.items():
+        code = shader(gs=gs, extra=GS_SUPPORT)
+        cases.append((name, "weird geometry shader: %s" % name[len("gs-weird-"):],
+                      "emulated, unless the construct is invisible to a text scan",
                       lambda xml, c=code, t=tech: replace_code(xml, t, c)))
 
     for name, spec in IFACE_CASES.items():

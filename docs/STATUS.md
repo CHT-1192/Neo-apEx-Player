@@ -172,6 +172,27 @@ disappears with the compile.  That is a change to how the emulation is keyed, so
 it is deliberately not bundled into this round.  Reproduce with
 `work/hostile/cases/gs-append-scalar.apx`.
 
+## MILESTONE 11: weird but legal geometry shaders
+
+The corpus above started from deliberately *invalid* shaders.  This round is the
+opposite: shaders that compile, that fxc and D3D11 accept, and that the emulator
+still got wrong.  Nine of them (`gs-weird-*`):
+
+| Shader | Was | Now |
+| --- | --- | --- |
+| `void g(VSOUT i[3], inout TriangleStream<VSOUT> o)` -- the primitive modifier is optional and HLSL defaults it to `triangle` | refused, "input primitive is not point/line/triangle" | emulated; the shape reader reads `type name` first and only treats a leading word as a modifier if it is one |
+| `TriangleStream < VSOUT > o`, `i [ 3 ]`, `o . Append ( i [ 0 ] )` | refused; the stream element type kept its spaces (`" VSOUT " has no Position member`), and the `.` receiver was only stripped when there was no space around the dot | emulated; tokens are trimmed and the receiver is skipped on both sides of the dot |
+| `uint pid : SV_PrimitiveID`, `uint inst : SV_GSInstanceID` | the translated stage named `pid`, which it never defined: `error: 'pid' : unknown variable`, emulation refused | emulated. The emulation draws one input primitive as `slots` consecutive vertices, so `SV_PrimitiveID` is `gsemu_vid / slots` and there is no GS instancing, so `SV_GSInstanceID` is 0. Any *other* system value is now refused by name in `AnalyseGeometryShader` |
+| `#define AP(x) o.Append(x)` | refused as "the geometry shader appends nothing" -- the scan reads the source before the preprocessor runs | still not emulated, but it says so: *"no Append call is visible to a text scan -- if the Append is written through a #define, the emulation cannot see it"*. Fixing it properly means analysing the preprocessed source, which moves the whole translation onto that source |
+| Appends in mutually exclusive `switch` branches, against `maxvertexcount(3)` | refused as "more Append calls than maxvertexcount allows" | still refused (the count is static and cannot tell branches apart), but the message says the count is static |
+| **A `RestartStrip` inside a branch, followed by more Appends** | **emulated, with a wrong picture.** The index buffer's primitive restarts are decided statically, so a restart the stream does not take splits a strip that should have stayed whole -- 6 vertices in one strip (four triangles) drawn as two strips of three (two triangles) | refused: *"a RestartStrip inside a branch is followed by more Appends, so the strip layout is only known at run time"*. An unconditional restart with Appends after it is still emulated (`gs-6-restart-middle`), and so is Clean Slate's wireframe, whose conditional restart is its last statement -- nothing can follow it, so the static layout is exact |
+
+That last row is the one worth remembering: it was not a refusal that was too
+strict, it was a **wrong picture**, which is the failure mode this file exists to
+avoid.  The check is deliberately narrow -- it walks out of the enclosing blocks
+from the `RestartStrip`, including braceless `if (...) o.RestartStrip();`, and
+only refuses when an `Append` follows.
+
 ## MILESTONE 9: D3D11 links shaders by signature, Vulkan links them by location
 
 Running the other bundled projects rather than only Clean Slate turned up a
