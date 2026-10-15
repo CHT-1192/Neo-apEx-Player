@@ -1144,14 +1144,54 @@ bool ContextImpl::PrepareDraw(VkPipeline *outPipeline, VkPipelineLayout *outLayo
   emulationPlan = nullptr;
   if (stages[kStageGS].shader && phxvk::Vk().features.geometryShader == VK_FALSE)
   {
-    if (ID3D11VertexShader *vs = EmulatedVertexShaderFor(stages[kStageGS].shader))
+    const EmulatedGeometryShader *plan = EmulationPlanFor(stages[kStageGS].shader);
+    ID3D11VertexShader *emuVs = plan ? EmulatedVertexShaderFor(stages[kStageGS].shader) : nullptr;
+    // The fat vertex repeats the input layout once per input vertex, so the
+    // emulated stage can need more vertex attributes than the device has.  The
+    // emulated stage declares the original vertex input struct once per input
+    // vertex it reads, so its own reflection says exactly how many locations
+    // are in play -- it is not elements * inputVertices, because a geometry
+    // shader that touches three of its six input vertices only makes the
+    // emulation declare three repetitions.  Metal allows 31 attributes, and at
+    // 36 MoltenVK fails pipeline creation with
+    //
+    //   program_source: error: 'attribute' attribute parameter is out of
+    //   bounds: must be between 0 and 30
+    //
+    // which loses the whole draw -- worse than dropping the geometry stage,
+    // which is what happens to every other shape this emulator refuses.
+    UINT64 attributesNeeded = 0;
+    if (emuVs)
+      for (const phxvk::VertexInput &in : static_cast<VertexShaderImpl *>(emuVs)->reflection.inputs)
+        attributesNeeded = std::max<UINT64>(attributesNeeded, (UINT64)in.location + 1);
+    // No reflection: fall back to the worst case, which is every repetition.
+    if (plan && emuVs && attributesNeeded == 0 && inputLayout)
+      attributesNeeded = (UINT64)static_cast<InputLayoutImpl *>(inputLayout)->elements.size() *
+                         (UINT64)plan->program.inputVertices;
+    const UINT64 attributeSlots = phxvk::Vk().props.limits.maxVertexInputAttributes;
+    if (plan && attributesNeeded > attributeSlots)
     {
-      auto *impl = static_cast<VertexShaderImpl *>(vs);
-      key.vs = impl->contentHash;
-      key.emulated = true;
-      key.topology = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP;
-      emulatedPipeline = true;
-      emulationPlan = EmulationPlanFor(stages[kStageGS].shader);
+      static int loggedFat = 0;
+      if (loggedFat++ < 4)
+        phxvk::LogWarn("[d3d11] a geometry shader is NOT emulated: reproducing it needs %llu vertex attributes "
+                       "(%d input vertices against a %u element input layout) and this device allows %llu.  The "
+                       "geometry stage is dropped and the draw happens without it.",
+                       (unsigned long long)attributesNeeded, plan->program.inputVertices,
+                       inputLayout ? (unsigned)static_cast<InputLayoutImpl *>(inputLayout)->elements.size() : 0u,
+                       (unsigned long long)attributeSlots);
+      plan = nullptr;
+      emuVs = nullptr;
+    }
+    if (plan && emuVs)
+    {
+      {
+        auto *impl = static_cast<VertexShaderImpl *>(emuVs);
+        key.vs = impl->contentHash;
+        key.emulated = true;
+        key.topology = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP;
+        emulatedPipeline = true;
+        emulationPlan = plan;
+      }
     }
   }
   key.ps = stages[kStagePS].shader ? stages[kStagePS].shader->contentHash : 0;
@@ -1256,11 +1296,11 @@ bool ContextImpl::PrepareDraw(VkPipeline *outPipeline, VkPipelineLayout *outLayo
     // would never print at all.
     static int logged = 0;
     if (logged < 8)
-      phxvk::LogWarn("[d3d11] geometry shader stage DROPPED for pipeline #%u (MoltenVK/Metal has no geometry "
-                     "shaders); any primitive that shader builds is missing. Affected techniques in Clean "
-                     "Slate: [PBR Mixed Rendering] (double-sided triangles), [PBR Mixed Rendering with "
-                     "vertex offset] (flat normals + double-sided), Default Particle and PointSprites "
-                     "(screen-space quads), Wireframe (the background grid). See docs/STATUS.md.",
+      phxvk::LogWarn("[d3d11] geometry shader stage DROPPED for pipeline #%u: this device has no geometry shader "
+                     "stage (MoltenVK/Metal) and the shader's shape is not one src/rhi/gs_emulation.cpp can "
+                     "reproduce, so every primitive it would have built is missing from this draw.  The reason "
+                     "the shape was refused is logged as 'geometry shader not emulated' when the shader is "
+                     "compiled. See docs/STATUS.md MILESTONE 7.",
                      ++logged);
   }
   if (phxvk::Vk().features.geometryShader != VK_FALSE) addStage(VK_SHADER_STAGE_GEOMETRY_BIT, kStageGS);
@@ -1322,9 +1362,15 @@ bool ContextImpl::PrepareDraw(VkPipeline *outPipeline, VkPipelineLayout *outLayo
     for (UINT i = 0; i < il->elements.size(); i++)
     {
       const D3D11_INPUT_ELEMENT_DESC &e = il->elements[i];
-      // Every repetition is read by the emulated stage, whatever the original
-      // vertex shader consumed.
-      if (reps == 1 && !shaderReadsLocation(i)) continue;
+      // The emulated stage declares the original vertex input struct once per
+      // input vertex, so every repetition reads exactly what the first one
+      // does: the unused-location filter applies to each of them, not just to
+      // the unemulated case.  (It said the opposite before, on the theory that
+      // the packed struct reads every member; it does not -- it holds the
+      // shader's own input struct, whose unread members stay unread.  Skipping
+      // the filter doubled the attribute count and pushed a six input vertex
+      // geometry shader past Metal's 31 attribute limit.)
+      if (!shaderReadsLocation(i)) continue;
       VkVertexInputAttributeDescription a{};
       a.location = rep * (UINT)il->elements.size() + i;
       a.binding = e.InputSlot;

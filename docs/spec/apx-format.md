@@ -2097,3 +2097,44 @@ next to each excerpt. No sample was retyped by hand; they were extracted with Py
 verbatim text, so indentation, whitespace-only text-node lines and XML escaping are preserved).
 
 
+
+---
+
+## 17. Corrections and additions found by writing a project by hand
+
+§1–16 were derived from reading the code and the shipped files.  Building a
+minimal project from scratch (`work/hostile/minimal-draw.apx`) and a set of
+deliberately hostile ones (`tools/make_hostile_apx.py`) turned up these:
+
+* **§7.4 is wrong about `CullMode`.** The byte goes straight into
+  `D3D11_RASTERIZER_DESC::CullMode` (`Material_Tool.cpp:770`), where `1` is
+  `D3D11_CULL_NONE`, not `D3D11_CULL_FRONT`.  `1` is the winding-independent
+  choice.
+* **§7.5 describes only part of `cbuffer b1`.** The engine prepends `worldmat`
+  and `itworldmat` (128 bytes) *before* `MATERIALDATASIZE` (256) --
+  `phxEngine.cpp:183`, `RenderLayer.cpp:65` -- so a shader that declares `c` as
+  `{float4x4 worldmat; float4x4 itworldmat; float4 color; ...}` is right and one
+  that declares only the material parameters is not.
+* **The vertex shader's input declaration ORDER is load-bearing.** The shim pairs
+  `D3D11_INPUT_ELEMENT_DESC[i]` with glslang location `i`, and glslang assigns
+  locations by declaration order, so a `VSIN` must repeat `vxdecl2`'s order
+  exactly (POSITION0, POSITION1, NORMAL0, COLOR0, TEXCOORD0, TEXCOORD1).
+  Declaring only the fields you use silently shifts every later semantic.
+* **`<event>` needs explicit `StartFrame`/`EndFrame`.** An event created with
+  `CreateEvent(type, 0, 0, 0, NULL)` zero-inits both, and the activity test is
+  `StartFrame <= Frame < EndFrame`, so such an event is never active.
+* **`<camera>` is optional** and is auto-picked from the scene's first
+  `Object_CamEye`, preferring one with a `<targetobject>`.  Camera *direction* is
+  not defaulted by `CphxObject::CalculateAnimation`, so a camera at the origin
+  with no `targetobject` gives a degenerate look-at.
+* **`Mesh_Plane`'s parameters are subdivision counts, not extents**: the plane
+  always spans -0.5..+0.5 in XZ with normal +Y, so the object's
+  `<transformation>` has to scale and rotate it, and `Data[0] = 0` divides by
+  zero.
+* **A scene's `<Clip>` must precede its `<Object>` children**: `ImportData` reads
+  the clips first and `AddObject` makes one in-memory clip per existing scene
+  clip, so an object with no clip has a null `Clips[]` at render time.
+* **The loader trusts the file in ways that crash it** -- an unknown
+  `<event><Type>`, an unknown scene `<Object Type=...>` or an unresolvable
+  `<model>` GUID, and an out-of-range `<clipspline type=...>`.  See MILESTONE 10
+  in `docs/STATUS.md` for the sites and the fixes.

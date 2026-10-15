@@ -361,6 +361,28 @@ std::string TranslateGeometryShaderToVertex(const std::string &source, const GsP
   const std::string stageType = ReadIdent(inPart, q);
   if (stageType.empty()) return std::string();
 
+  // The name the geometry shader gives its input array.  The generated vertex
+  // entry point runs the real vertex shader once per input vertex and has to
+  // store the results in a local array that the translated body can index, so
+  // that array is declared under exactly this name.  It used to be called
+  // `input` unconditionally, which silently produced HLSL that did not compile
+  // ("error: 'i' : unknown variable") for any geometry shader that named the
+  // parameter anything else -- every geometry shader in Clean Slate happens to
+  // call it `input`, so the port only ever worked by luck.
+  std::string inputName;
+  {
+    const size_t bracket = inPart.find('[');
+    if (bracket != std::string::npos)
+    {
+      size_t at = bracket;
+      while (at > 0 && (inPart[at - 1] == ' ' || inPart[at - 1] == '\t')) at--;
+      const size_t end = at;
+      while (at > 0 && IsIdentChar(inPart[at - 1])) at--;
+      inputName = inPart.substr(at, end - at);
+    }
+  }
+  if (inputName.empty()) return std::string();
+
   std::string outType;
   if (p != std::string::npos)
   {
@@ -436,9 +458,9 @@ std::string TranslateGeometryShaderToVertex(const std::string &source, const GsP
   out += " };\n";
 
   out += outType + " " + gsEntry + "_emu( " + packedInputName + " gsemu_packed, uint gsemu_vid : SV_VertexID )\n{\n";
-  out += "  " + stageType + " input[" + std::to_string(gs.inputVertices) + "];\n";
+  out += "  " + stageType + " " + inputName + "[" + std::to_string(gs.inputVertices) + "];\n";
   for (int i = 0; i < gs.inputVertices; i++)
-    out += "  input[" + std::to_string(i) + "] = " + vertexEntry + "( gsemu_packed.a" + std::to_string(i) + " );\n";
+    out += "  " + inputName + "[" + std::to_string(i) + "] = " + vertexEntry + "( gsemu_packed.a" + std::to_string(i) + " );\n";
   out += "  const uint gsemu_slot = gsemu_vid % " + std::to_string(gs.slots) + "u;\n";
   out += "  uint gsemu_at = 0u;\n";
   out += "  " + outType + " gsemu_out;\n";

@@ -1109,6 +1109,85 @@ private:""",
 """,
         "diagnostic for an otherwise silent infinite generator loop.",
     ),
+    (
+        "Phoenix_Tool/apxProject.cpp",
+        """    CphxEvent_Tool *e = Timeline->CreateEvent( EventType, 0, 0, 0, NULL );
+    e->Import( &n );""",
+        """    CphxEvent_Tool *e = Timeline->CreateEvent( EventType, 0, 0, 0, NULL );
+    // [port] CreateEvent returns NULL for a type it does not know (anything
+    // outside PHXEVENTTYPE), and this imported straight through the null
+    // pointer: an <event><Type>7</Type></event> in a project file killed the
+    // player with SIGSEGV while importing.  An event type this build cannot
+    // render is a reason to skip that event, not to die.
+    if ( !e )
+    {
+      LOG_ERR( "[import] event %d has type %d, which this build does not know; skipping it",
+               x, (TS32)EventType );
+      continue;
+    }
+    e->Import( &n );""",
+        "a hostile .apx with an out of range <event><Type> dereferenced NULL.",
+    ),
+    (
+        "Phoenix_Tool/Scene_tool.cpp",
+        """    CphxObject_Tool *t = AddObject( type, Data );
+    t->Import( &n );""",
+        """    CphxObject_Tool *t = AddObject( type, Data );
+    // [port] AddObject returns NULL for a primitive id it does not know, and
+    // for an Object_Model whose <model> GUID resolved to nothing (it bails on
+    // a null Data).  This imported straight through the null pointer, so
+    // <Object Type="99"> or a stale model GUID killed the player during import.
+    if ( !t )
+    {
+      LOG_ERR( "[import] scene object %d has type %d and could not be created; skipping it",
+               x, (TS32)type );
+      continue;
+    }
+    t->Import( &n );""",
+        "a hostile .apx with an unknown scene object type or model GUID "
+        "dereferenced NULL.",
+    ),
+    (
+        "Phoenix_Tool/Scene_tool.cpp",
+        """    PHXSPLINETYPE type = Spline_Position_x;
+    n.GetAttributeAsInteger( _T( "type" ), (TS32*)&type );
+
+    CphxClipSpline_Tool *s = new CphxClipSpline_Tool( type );""",
+        """    PHXSPLINETYPE type = Spline_Position_x;
+    n.GetAttributeAsInteger( _T( "type" ), (TS32*)&type );
+
+    // [port] The type attribute is a PHXSPLINETYPE used as an index into
+    // CphxObject::SplineResults[Spline_Count].  It was read with no range check
+    // at all, so <clipspline type="66"> wrote past the end of every object that
+    // used the clip and killed the player with SIGBUS on every frame.  Reject
+    // it here, where there is something to log with, and keep the check on the
+    // read side in Scene.cpp as well.
+    if ( (TS32)type < 0 || (TS32)type >= (TS32)Spline_Count )
+    {
+      LOG_ERR( "[import] clip spline type %d is outside 0..%d; skipping it",
+               (TS32)type, (TS32)Spline_Count - 1 );
+      continue;
+    }
+
+    CphxClipSpline_Tool *s = new CphxClipSpline_Tool( type );""",
+        "a hostile .apx with an out of range <clipspline type> indexed "
+        "SplineResults[] out of bounds.",
+    ),
+    (
+        "Phoenix/Scene.cpp",
+        """    CphxClipSpline *s = Clips[ Clip ]->Splines[ x ];
+    s->Spline->CalculateValue( t );
+    SplineResults[ s->Type ] = s->Spline->Value[ 0 ];""",
+        """    CphxClipSpline *s = Clips[ Clip ]->Splines[ x ];
+    s->Spline->CalculateValue( t );
+    // [port] Belt and braces for the check Scene_tool.cpp does at import: this
+    // writes SplineResults[] with an index that came out of the file, and a
+    // wrong one corrupts the object rather than failing.  No logging macro is
+    // reachable from this translation unit, so it is silent.
+    if ( (int)s->Type < 0 || (int)s->Type >= Spline_Count ) continue;
+    SplineResults[ s->Type ] = s->Spline->Value[ 0 ];""",
+        "guard the SplineResults[] index on the read side too.",
+    ),
 ]
 
 

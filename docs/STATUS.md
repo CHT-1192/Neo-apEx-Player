@@ -58,6 +58,99 @@ behind both APIs.
 * Mesh text generation uses Windows GDI glyph outlines + the GLU tessellator;
   macOS provides GLU via the OpenGL framework (verified to build and run).
 
+## MILESTONE 10: a hostile .apx, and what it broke
+
+Clean Slate is one project, written by one team, and the port had passed
+everything it could throw at it while a real defect was still sitting there
+(MILESTONE 9 only showed up on the *other* bundled demos).  So there is now a
+generator for projects Clean Slate is not:
+`tools/make_hostile_apx.py` writes one `.apx` per case, each a copy of a real
+project with exactly one thing changed -- a geometry shader shape at or past the
+edge of what the emulator accepts, a shader interface D3D11 links and Vulkan
+does not, or a numeric value the loader trusts -- and
+`tools/run_hostile_apx.py` runs them all with a per-case watchdog and reports
+which ones crash, hang, or merely log errors.  Cases and their intent are in
+`work/hostile/cases/CASES.md` (generated, gitignored); the four defects below all
+came out of the first sweep.
+
+**A geometry shader's input array was assumed to be called `input`.**
+`TranslateGeometryShaderToVertex` emits a vertex entry point that runs the real
+vertex shader once per input vertex into a local array and then walks the
+geometry shader body; it declared that array as `input[N]` unconditionally, so
+any shader whose parameter had another name produced HLSL that did not compile:
+
+```
+[d3d11] geometry shader emulation compiled nothing (g): gs-emu/vs_5_0:88: error: 'i' : unknown variable
+```
+
+The emulation was then refused, the stage dropped, and the message blamed the
+shape rather than the code generator.  Every geometry shader in Clean Slate
+happens to call the parameter `input`, so the port had only ever worked by luck.
+The array is now declared under the shader's own parameter name, found as the
+identifier before the `[` in the parameter list.
+
+**The fat vertex can need more vertex attributes than the device has.**  The
+emulation packs all K vertices of one input primitive into a single vertex by
+repeating the input layout K times, so the attribute count is
+`elements * inputVertices`.  Metal allows 31; the engine's six element layout
+behind a `triangleadj` geometry shader that reads all six input vertices wants
+36, and MoltenVK then refuses the pipeline:
+
+```
+program_source:52:43: error: 'attribute' attribute parameter is out of bounds: must be between 0 and 30
+    float4 gsemu_packed_a5_UV [[attribute(34)]];
+```
+
+which loses the whole draw -- worse than dropping the geometry stage, which is
+what happens to every shape the emulator refuses.  Two changes: the unused
+location filter now applies to the emulated path as well (it was skipped there on
+the false premise that the packed struct reads every member -- it holds the
+shader's own input struct, so it reads exactly what that reads), and the
+remaining count is taken from the *emulated* stage's reflection, which is the
+number the driver will actually need, rather than the worst case.  A shape that
+still does not fit is refused with the numbers spelled out.  The proper fix, not
+done, is to carry the fat vertex in a storage buffer instead of attributes,
+which has no limit at all.
+
+**A hand-written .apx could kill the player during import, three ways.**  The
+loader trusts the file, and the vendored tool-side code indexes arrays and
+dereferences pointers with what it finds:
+
+| XML | Where | Was |
+| --- | --- | --- |
+| `<event><Type>7</Type></event>` (or negative, or huge) | `apxProject.cpp:504` | `CreateEvent` returns NULL for a type outside `PHXEVENTTYPE`; the caller imported through it -- SIGSEGV |
+| `<Object Type="99">` in a scene (or negative, or a `<model>` GUID that resolves to nothing) | `Scene_tool.cpp:254` | `AddObject` returns NULL and the caller does not check -- SIGSEGV |
+| `<clipspline type="66">` | `Scene_tool.cpp:2102`, `Scene.cpp:303` | the type is read as a `PHXSPLINETYPE` with no range check and used as an index into `SplineResults[Spline_Count]` -- SIGBUS, every frame |
+
+All three are fixed in `tools/apply_patches.py`: the import sites skip the
+element and say so, and the read side in `Scene.cpp` keeps a silent bounds check
+as well.  Eight cases that used to crash on import now exit 0, and Clean Slate's
+0:31 / 1:06 / 1:18 frames still dump byte-identically.
+
+**Still broken: a malformed geometry shader crashes glslang.**  `Append(1.0)`
+(an argument that is not the stream's element type) and `Append(undefined())`
+(an argument that does not resolve) both take glslang down inside
+`HlslParseContext::finalizeAppendMethods()`, which calls `handleAssign` on a
+null argument node:
+
+```
+std::__function::__func<glslang::HlslParseContext::handleAssign...>
+glslang::HlslParseContext::handleAssign(...)
+glslang::HlslParseContext::finalizeAppendMethods()
+glslang::HlslParseContext::finish()
+...
+phxvk::CompileHLSL(...)
+```
+
+That is a bug in glslang, not in this port, and no real project ships a broken
+geometry shader -- but the port should not die on one.  The fix is to stop
+compiling the original `g` entry point altogether: nothing on this device can run
+it, the shim only needs it as a registry key and a reflection carrier, and
+*translated* sources have no `Append` methods left to finalise, so the crash
+disappears with the compile.  That is a change to how the emulation is keyed, so
+it is deliberately not bundled into this round.  Reproduce with
+`work/hostile/cases/gs-append-scalar.apx`.
+
 ## MILESTONE 9: D3D11 links shaders by signature, Vulkan links them by location
 
 Running the other bundled projects rather than only Clean Slate turned up a

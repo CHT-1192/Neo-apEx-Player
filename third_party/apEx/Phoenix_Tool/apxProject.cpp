@@ -502,6 +502,17 @@ void CapexProject::ImportMain( CXMLDocument &d, bool reset )
     if ( !n.GetChild( _T( "Type" ) ).GetValue( (TS32&)EventType ) ) continue;
 
     CphxEvent_Tool *e = Timeline->CreateEvent( EventType, 0, 0, 0, NULL );
+    // [port] CreateEvent returns NULL for a type it does not know (anything
+    // outside PHXEVENTTYPE), and this imported straight through the null
+    // pointer: an <event><Type>7</Type></event> in a project file killed the
+    // player with SIGSEGV while importing.  An event type this build cannot
+    // render is a reason to skip that event, not to die.
+    if ( !e )
+    {
+      LOG_ERR( "[import] event %d has type %d, which this build does not know; skipping it",
+               x, (TS32)EventType );
+      continue;
+    }
     e->Import( &n );
   }
 

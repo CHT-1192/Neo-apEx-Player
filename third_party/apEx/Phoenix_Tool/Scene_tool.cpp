@@ -252,6 +252,16 @@ void CphxScene_Tool::ImportData( CXMLNode *Node )
     }
 
     CphxObject_Tool *t = AddObject( type, Data );
+    // [port] AddObject returns NULL for a primitive id it does not know, and
+    // for an Object_Model whose <model> GUID resolved to nothing (it bails on
+    // a null Data).  This imported straight through the null pointer, so
+    // <Object Type="99"> or a stale model GUID killed the player during import.
+    if ( !t )
+    {
+      LOG_ERR( "[import] scene object %d has type %d and could not be created; skipping it",
+               x, (TS32)type );
+      continue;
+    }
     t->Import( &n );
   }
 
@@ -2102,6 +2112,19 @@ void CphxObjectClip_Tool::ImportData( CXMLNode *Node )
     if ( !n.HasAttribute( _T( "type" ) ) ) continue;
     PHXSPLINETYPE type = Spline_Position_x;
     n.GetAttributeAsInteger( _T( "type" ), (TS32*)&type );
+
+    // [port] The type attribute is a PHXSPLINETYPE used as an index into
+    // CphxObject::SplineResults[Spline_Count].  It was read with no range check
+    // at all, so <clipspline type="66"> wrote past the end of every object that
+    // used the clip and killed the player with SIGBUS on every frame.  Reject
+    // it here, where there is something to log with, and keep the check on the
+    // read side in Scene.cpp as well.
+    if ( (TS32)type < 0 || (TS32)type >= (TS32)Spline_Count )
+    {
+      LOG_ERR( "[import] clip spline type %d is outside 0..%d; skipping it",
+               (TS32)type, (TS32)Spline_Count - 1 );
+      continue;
+    }
 
     CphxClipSpline_Tool *s = new CphxClipSpline_Tool( type );
     s->ImportData( &n );

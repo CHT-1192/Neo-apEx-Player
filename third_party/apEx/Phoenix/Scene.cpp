@@ -300,6 +300,11 @@ void CphxObject::CalculateAnimation( int Clip, float t )
   {
     CphxClipSpline *s = Clips[ Clip ]->Splines[ x ];
     s->Spline->CalculateValue( t );
+    // [port] Belt and braces for the check Scene_tool.cpp does at import: this
+    // writes SplineResults[] with an index that came out of the file, and a
+    // wrong one corrupts the object rather than failing.  No logging macro is
+    // reachable from this translation unit, so it is silent.
+    if ( (int)s->Type < 0 || (int)s->Type >= Spline_Count ) continue;
     SplineResults[ s->Type ] = s->Spline->Value[ 0 ];
     if ( s->Type == Spline_Rotation ) RotationResult = s->Spline->GetQuaternion();
   }
