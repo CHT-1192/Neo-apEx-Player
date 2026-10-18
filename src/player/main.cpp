@@ -972,9 +972,14 @@ int main(int argc, char **argv)
             // are submitted there, so reading the target before that returns
             // whatever the texture held beforehand -- which is one explanation
             // for a "blank" loading screen that renders perfectly.
+            // A single sample at one moment is not enough: measured frame by
+            // frame, every one of a load's ~100 frames has the bar on it, while
+            // the one frame this used to write (the first with pos >= 0.5) came
+            // out black.  Sampling a sequence is what actually shows whether the
+            // screen renders, and it costs one file per sampled frame.
             bool wantLoadingDump = false;
             for (auto &d : opt.dumps)
-              if (d.loading && !d.done && pos >= 0.5f) wantLoadingDump = true;
+              if (d.loading && !d.done && pos >= 0.01f && (precalcFrames % 8) == 0) wantLoadingDump = true;
 
             if (SwapChain) SwapChain->Present(0, 0);
 
@@ -983,16 +988,17 @@ int main(int argc, char **argv)
               for (auto &d : opt.dumps)
               {
                 if (!d.loading || d.done) continue;
-                d.done = true;
+                if (pos >= 0.999f) d.done = true; // the sequence ends with the load
                 std::string err;
+                const std::string base = d.path + "." + std::to_string(precalcFrames);
                 CphxRenderTarget *target = PrecalcProject.Timeline.Target;
                 if (target && target->Texture)
                 {
-                  const std::string rt = d.path + ".target.ppm";
+                  const std::string rt = base + ".target.ppm";
                   if (!phxplayer::DumpTextureToPPM(target->Texture, rt.c_str(), &err))
                     phxvk::LogError("--dump-frame loading (target) failed: %s", err.c_str());
                 }
-                if (!phxplayer::DumpBackBufferToPPM(d.path.c_str(), &err))
+                if (!phxplayer::DumpBackBufferToPPM(base.c_str(), &err))
                   phxvk::LogError("--dump-frame loading failed: %s", err.c_str());
               }
             }

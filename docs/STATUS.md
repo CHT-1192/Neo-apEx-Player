@@ -205,6 +205,51 @@ recording, two of them correctness bugs:
   that a sign had been consumed: `atoi("+")` is 0, so `k < +abc` read as a trip
   count of zero.  It now requires at least one digit.
 
+## The loading screen renders. The tool said otherwise.
+
+The loading screen was recorded here as blank -- pure black for
+`precalcminimal`, noise for `precalcphoenix_shader` -- for months, and it was
+wrong.  Sampling every frame of a load instead of one frame at one moment:
+
+```
+13 sampled frames (every 8th), Clean Slate:
+  render target   mean 0.24 -> 0.85, max 186, black frames: 0 of 13
+  back buffer     mean 0.32 -> 1.15, max 255, black frames: 0 of 13
+```
+
+The bar is there from the first sampled frame to the last, and it is presented.
+`--dump-frame loading=FILE` wrote **one** frame, the first with `pos >= 0.5`, and
+that frame came out black with both buffers empty -- reproducibly, at
+`pos = 0.5068` after 73 precalc renders, while a full-frame scan shows that same
+iteration carrying the bar.  So the one instrument that ever reported this was
+the broken one.  It now writes a short sequence (`FILE.<n>` and
+`FILE.<n>.target.ppm`, every 8th frame) which is both harder to fool and enough
+to see the bar move.
+
+Four hypotheses died on the way, each to a single run rather than an argument:
+
+* the pass has no render target -- it has one, 1280x720;
+* the pass has no pixel shader -- it has one, and cbuffer b0 is
+  `{t, 1.7778, 1280, 720}` with `t` climbing through the load;
+* the shader-toy draws into one target and the blit reads another -- `[blit]`
+  and `[shadertoy]` print the same pointer;
+* multisampled render targets -- both project loaders ask for
+  `D3D11_RTV_DIMENSION_TEXTURE2DMS` on single-sample textures and the shim has
+  always corrected that, so it cannot separate the loader that works from the
+  one that does not.
+
+Two mistakes of mine are worth recording because they nearly turned into
+"fixes": a `grep '^\[quad\]'` cannot match a line the logger prefixes with
+`[phxvk warn] `, which made three working probes look silent and produced a
+confident, wrong conclusion that the engine never reached our device context;
+and the single-frame dump above.
+
+**Still unconfirmed: the window.** Everything here is measured headless, on the
+render target and the presented back buffer.  Running the player windowed steals
+the desktop's focus, so it is not something this project does; if the loading
+screen is blank on screen, the next step is a windowed capture on a machine that
+can afford it, not another headless experiment.
+
 ## MILESTONE 11: weird but legal geometry shaders
 
 The corpus above started from deliberately *invalid* shaders.  This round is the
