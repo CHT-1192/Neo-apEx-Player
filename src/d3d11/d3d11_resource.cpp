@@ -887,6 +887,24 @@ HRESULT DeviceImpl::CreateRenderTargetView(ID3D11Resource *pResource, const D3D1
   rtv->desc = d;
   rtv->v.format = DXGIFormatToVk(d.Format ? d.Format : tex->format);
 
+  // The engine asks for a D3D11_RTV_DIMENSION_TEXTURE2DMS view of single-sample
+  // render targets (Project.cpp:205, phxEngine.cpp:277).  D3D11 would reject
+  // that; this shim quietly corrects it below, which is the behaviour we want --
+  // but it is worth saying once, because a view dimension that disagrees with
+  // the texture is the kind of thing that later looks like a rendering bug.
+  {
+    const bool msView = d.ViewDimension == D3D11_RTV_DIMENSION_TEXTURE2DMS ||
+                        d.ViewDimension == D3D11_RTV_DIMENSION_TEXTURE2DMSARRAY;
+    static bool saidOnce = false;
+    if (!saidOnce && msView != (tex->sampleCount > 1))
+    {
+      saidOnce = true;
+      phxvk::LogInfo("[d3d11] the engine asked for a %s render target view of a %u-sample texture; using the "
+                     "matching dimension",
+                     msView ? "multisampled" : "single-sample", tex->sampleCount);
+    }
+  }
+
   uint32_t baseMip = 0, mips = 1, baseLayer = 0, layers = 1;
   VkImageViewType type = VK_IMAGE_VIEW_TYPE_2D;
   switch (d.ViewDimension)

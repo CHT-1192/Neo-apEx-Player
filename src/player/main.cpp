@@ -968,27 +968,34 @@ int main(int argc, char **argv)
             PrecalcProject.Timeline.Render(pos * 1000.0f, false, false);
             precalcFrames++;
             phxDepthBufferView = demoDepthView;
-            // The loading screen is only on the back buffer between Render()
-            // and Present(), so a "loading=path" dump has to happen here.  One
-            // frame is written, halfway through the load: before that the
-            // generator has produced nothing to show, and after it the loading
-            // project's timeline is over.
+            // Dump AFTER Present().  The D3D11 commands for this loading frame
+            // are submitted there, so reading the target before that returns
+            // whatever the texture held beforehand -- which is one explanation
+            // for a "blank" loading screen that renders perfectly.
+            bool wantLoadingDump = false;
             for (auto &d : opt.dumps)
-            {
-              if (!d.loading || d.done || pos < 0.5f) continue;
-              d.done = true;
-              std::string err;
-              CphxRenderTarget *target = PrecalcProject.Timeline.Target;
-              if (target && target->Texture)
-              {
-                const std::string rt = d.path + ".target.ppm";
-                if (!phxplayer::DumpTextureToPPM(target->Texture, rt.c_str(), &err))
-                  phxvk::LogError("--dump-frame loading (target) failed: %s", err.c_str());
-              }
-              if (!phxplayer::DumpBackBufferToPPM(d.path.c_str(), &err))
-                phxvk::LogError("--dump-frame loading failed: %s", err.c_str());
-            }
+              if (d.loading && !d.done && pos >= 0.5f) wantLoadingDump = true;
+
             if (SwapChain) SwapChain->Present(0, 0);
+
+            if (wantLoadingDump)
+            {
+              for (auto &d : opt.dumps)
+              {
+                if (!d.loading || d.done) continue;
+                d.done = true;
+                std::string err;
+                CphxRenderTarget *target = PrecalcProject.Timeline.Target;
+                if (target && target->Texture)
+                {
+                  const std::string rt = d.path + ".target.ppm";
+                  if (!phxplayer::DumpTextureToPPM(target->Texture, rt.c_str(), &err))
+                    phxvk::LogError("--dump-frame loading (target) failed: %s", err.c_str());
+                }
+                if (!phxplayer::DumpBackBufferToPPM(d.path.c_str(), &err))
+                  phxvk::LogError("--dump-frame loading failed: %s", err.c_str());
+              }
+            }
             SDL_PumpEvents();
           }
         }
