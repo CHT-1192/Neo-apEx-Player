@@ -298,8 +298,42 @@ licence notices are in its own headers and must be kept.
 
 ## Licence
 
-The vendored `third_party/apEx` code is the Conspiracy apEx source release and
-is under the **CC BY-NC** licence in `third_party/apEx/LICENSE.txt`. This port
-adds no commercial functionality and exists to satisfy curiosity and to learn
-from, in the spirit of the demoscene — the same terms the original release asks
-for.
+Two kinds of content, two sets of terms.
+
+**This project's own code** -- `src/`, `tools/`, `tests/`, `docs/`, the build
+files and `.github/` -- is under the **MIT licence** (`LICENSE`).  It is a
+separate Vulkan/D3D11-shim player that happens to load the format, not a port of
+the engine's own sources.  One file in `src/` is the exception and is *not* MIT:
+`src/player/precalc_blobs.cpp` embeds the release's four loading-screen projects
+(`apEx/MinimalPlayer/Data/precalc*.64k`) byte for byte, because the loading
+screen is player data rather than project data.  It is Conspiracy's, under the
+same CC BY-NC 4.0 as everything else listed below.
+
+**The vendored and quoted material** -- `third_party/apEx`, the shaders quoted
+verbatim in `tests/` and `tools/` (see above), and `demo/cleanslate.apx` with
+`demo/step010padding.mvm` -- is Conspiracy's apEx source release and Clean Slate
+project, under **CC BY-NC 4.0** (`third_party/apEx/LICENSE.txt`, the licence
+file exactly as it ships).  That licence carries **no ShareAlike** clause, which
+is why this project's own code can be MIT; it does require attribution, a
+statement of the licence, and -- clause 3(a)(1)(b) -- that modifications be
+**indicated**:
+
+> `third_party/apEx` here is **modified, and is a subset of the release**: it
+> carries `Bedrock/`, `Phoenix/`, `Phoenix_Tool/`, `LibCTiny/`, `Libraries/`,
+> `MVX/` and `MinimalPlayer/`, not the release's top level (`Projects/` lives in
+> `demo/` here, and the release's `README.md` is not vendored).  Every change to
+> the files it does carry is a single, documented edit in
+> `tools/apply_patches.py`, applied by running that script, and is marked
+> `[port]` in the source it touches.
+
+Because the vendored material is **NonCommercial**, the repository **as a
+whole** cannot be used for commercial purposes, and the MIT grant above does not
+change that.  The demo is Conspiracy's; this project only plays it back on
+another platform, and is itself non-commercial.
+
+`demo/step010padding.mvm` is the song data Clean Slate was written against, taken
+from the apEx release and used here only so that the player can be checked
+against the real timeline; the composition remains Conspiracy's (and its
+composer's), and no re-recording is distributed.  If you are the rights holder
+and would prefer it not to be here, it is one file to remove -- the player also
+runs without music.
