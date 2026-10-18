@@ -1,0 +1,37 @@
+Neo-apEx-Player
+Copyright 2026 CHT-1192
+
+This product includes material from the Conspiracy apEx source release
+(https://github.com/ConspiracyHu/apEx-public):
+
+  * the vendored engine sources under third_party/apEx, which are MODIFIED.
+    Every change is a documented edit in tools/apply_patches.py and is marked
+    [port] in the source it touches.  They are also a subset of the release:
+    Projects/ is not vendored (the demo lives in demo/ here) and the release's
+    own README is not included.
+
+  * the Clean Slate project and song data in demo/.
+
+  * the four loading-screen projects embedded byte for byte in
+    src/player/precalc_blobs.cpp.
+
+  * the shaders quoted verbatim in tests/gs_emulation_test.cpp,
+    tests/shader_interface_test.cpp and tools/make_hostile_apx.py.
+
+That material is Conspiracy's and is licensed under Creative Commons
+Attribution-NonCommercial 4.0 International (third_party/apEx/LICENSE.txt).  It
+is NOT covered by this project's Apache License 2.0, and because it is
+NonCommercial the repository as a whole may not be used for commercial purposes.
+
+Other bundled third-party libraries keep their own licences, reproduced in their
+own directories:
+
+  * third_party/imgui              MIT (third_party/imgui/LICENSE.txt)
+  * third_party/apEx/Libraries/V2  Artistic License 2.0
+                                   (third_party/apEx/Libraries/V2/LICENSE.txt)
+  * OpenSSL                        third_party/apEx/Bedrock/UtilLib/
+                                   ExternalLibraries/openssl; its licence notices
+                                   are in its own headers and must be kept.
+  * MVX                            closed-source x86-32 static libraries from the
+                                   apEx release (third_party/apEx/Libraries/MVX/),
+                                   used only by .github/workflows/mvx-windows.yml.

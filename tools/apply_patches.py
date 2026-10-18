@@ -1204,7 +1204,7 @@ private:""",
       {
         reportedShadertoy++;
         // No logging macro reaches this translation unit, so write it directly.
-        printf( "[shadertoy] pass %d of %d: rendertarget %p, ps %p, target %p, b0 = %.4f %.4f %.4f %.4f\n",
+        printf( "[shadertoy] pass %d of %d: rendertarget %p, ps %p, target %p, b0 = %.4f %.4f %.4f %.4f\\n",
                 (int)x, (int)Tech->PassCount, (void*)MaterialState[ x ]->RenderTarget,
                 (void*)Tech->RenderPasses[ x ]->PS, (void*)Target,
                 ShaderData[ 0 ], ShaderData[ 1 ], ShaderData[ 2 ], ShaderData[ 3 ] );
@@ -1237,7 +1237,7 @@ private:""",
       }
     }
 
-    //display frame
+    //display frame (after the [blit] diagnostic above)
     Prepare2dRender();""",
         "a blit that reads a different render target than the pass drew into leaves "
         "a blank screen and says nothing.",
