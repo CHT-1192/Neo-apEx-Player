@@ -278,6 +278,24 @@ The demo was made by Conspiracy; this project only plays it back on another
 platform, and is itself non-commercial. The music is produced by their own MVX
 synthesiser, not re-recorded.
 
+A few shaders are quoted **verbatim** in the port's own sources rather than
+paraphrased, because the tests exist to pin what those exact shaders do:
+`tests/gs_emulation_test.cpp` carries Clean Slate's `Wireframe` and
+`[PBR Mixed Rendering]` geometry shaders, `tests/shader_interface_test.cpp`
+carries the texture filter that draws the loading screen's logo, and
+`tools/make_hostile_apx.py` carries the engine's own 2D quad vertex shader.
+They are Conspiracy's code under the same CC BY-NC 4.0 licence as the rest of
+the release.
+
+`third_party/apEx/Libraries/MVX/*.lib` is MVX — the closed-source x86-32
+synthesiser the music is made with ("REALTIME BUZZ-BASED SYNTHESIZER" by
+Gargaj/Conspiracy) — redistributed unmodified as it ships in the release. It
+cannot be linked on arm64, and the macOS player never touches it: the only thing
+that uses it is `.github/workflows/mvx-windows.yml`, which links it into
+`mvx_render.exe` on a Windows runner and renders the track there.
+`third_party/apEx/Bedrock/UtilLib/ExternalLibraries/openssl` is OpenSSL, whose
+licence notices are in its own headers and must be kept.
+
 ## Licence
 
 The vendored `third_party/apEx` code is the Conspiracy apEx source release and
