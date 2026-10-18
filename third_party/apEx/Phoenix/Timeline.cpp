@@ -140,7 +140,7 @@ void CphxEvent_Shadertoy::Render( float t, float prevt, float aspect, bool subro
       }
     }
 
-    //render here
+    //render here (after the [shadertoy] diagnostic above)
     phxContext->Draw( 6, 0 );
 
     //clean up
@@ -383,7 +383,23 @@ void CphxTimeline::Render( float Frame, bool tool, bool subroutine )
 
   if ( Target && !tool )
   {
-    //display frame
+    // [port] diagnostic: the shader-toy pass above draws into
+    // MaterialState[x]'s render target, and this blit reads the EVENT's Target.
+    // When those are two different objects the pass renders into an image
+    // nobody looks at and the screen stays blank with nothing in the log to say
+    // so.
+    {
+      static int reportedBlit = 0;
+      if ( reportedBlit < 8 )
+      {
+        reportedBlit++;
+        printf( "[blit] event target %p view %p %dx%d\n", (void*)Target, (void*)Target->View,
+                (int)Target->XRes, (int)Target->YRes );
+        fflush( stdout );
+      }
+    }
+
+    //display frame (after the [blit] diagnostic above)
     Prepare2dRender();
     phxContext->PSSetShader( RenderPixelShader, NULL, 0 );
 

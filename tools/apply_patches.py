@@ -1212,10 +1212,35 @@ private:""",
       }
     }
 
-    //render here
+    //render here (after the [shadertoy] diagnostic above)
     phxContext->Draw( 6, 0 );""",
         "a shader-toy pass with no render target renders nothing silently; this is "
         "the loading-screen path.",
+    ),
+    (
+        "Phoenix/Timeline.cpp",
+        """    //display frame
+    Prepare2dRender();""",
+        """    // [port] diagnostic: the shader-toy pass above draws into
+    // MaterialState[x]'s render target, and this blit reads the EVENT's Target.
+    // When those are two different objects the pass renders into an image
+    // nobody looks at and the screen stays blank with nothing in the log to say
+    // so.
+    {
+      static int reportedBlit = 0;
+      if ( reportedBlit < 8 )
+      {
+        reportedBlit++;
+        printf( "[blit] event target %p view %p %dx%d\\n", (void*)Target, (void*)Target->View,
+                (int)Target->XRes, (int)Target->YRes );
+        fflush( stdout );
+      }
+    }
+
+    //display frame
+    Prepare2dRender();""",
+        "a blit that reads a different render target than the pass drew into leaves "
+        "a blank screen and says nothing.",
     ),
 ]
 

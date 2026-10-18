@@ -301,10 +301,14 @@ licence notices are in its own headers and must be kept.
 Two kinds of content, two sets of terms.
 
 **This project's own code** -- `src/`, `tools/`, `tests/`, `docs/`, the build
-files and `.github/` -- is under the **MIT licence** (`LICENSE`).  It is a
-separate Vulkan/D3D11-shim player that happens to load the format, not a port of
-the engine's own sources.  One file in `src/` is the exception and is *not* MIT:
-`src/player/precalc_blobs.cpp` embeds the release's four loading-screen projects
+files and `.github/` -- is a separate Vulkan/D3D11-shim player that happens to
+load the format, not a port of the engine's own sources.  It carries **no
+licence file**: default copyright applies, so it may be read and learned from,
+but no permission to reuse, modify or redistribute it is granted here.  It is
+*not* covered by the CC BY-NC terms below.  (A licence may be added later; that
+is the maintainer's decision, not a consequence of the terms above.)  One file
+in `src/` is the exception in the other direction: `src/player/precalc_blobs.cpp`
+embeds the release's four loading-screen projects
 (`apEx/MinimalPlayer/Data/precalc*.64k`) byte for byte, because the loading
 screen is player data rather than project data.  It is Conspiracy's, under the
 same CC BY-NC 4.0 as everything else listed below.
