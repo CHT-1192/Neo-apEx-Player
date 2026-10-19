@@ -1614,8 +1614,8 @@ type-specific payload follows.
 | 1 | `GUID` | 1 | GUID | |
 | 2 | `Type` | 1 | int | `PHXEVENTTYPE`; **an event without a parsable `Type` is skipped entirely** |
 | 3 | `Pass` | 1 | int | sort/group key, **not** a render pass index (see below) |
-| 4 | `StartFrame` | 1 | int | inclusive |
-| 5 | `EndFrame` | 1 | int | exclusive |
+| 4 | `StartFrame` | 1 | unsigned short | inclusive (65535 max) |
+| 5 | `EndFrame` | 1 | unsigned short | exclusive (65535 max) |
 | 6 | `TargetRT` | 1 | GUID text | render target this event draws into |
 | 7 | `Name` | 1 | text | may be empty |
 | 8 | `TimeSpline` | 1 | group | a **float16** spline block (§2.6) without a `type` attribute |
@@ -2138,3 +2138,45 @@ deliberately hostile ones (`tools/make_hostile_apx.py`) turned up these:
   `<event><Type>`, an unknown scene `<Object Type=...>` or an unresolvable
   `<model>` GUID, and an out-of-range `<clipspline type=...>`.  See MILESTONE 10
   in `docs/STATUS.md` for the sites and the fixes.
+
+### Corrections found by building a synthwave project from nothing
+
+Written by taking §14 at face value and authoring a project with no scene,
+camera, model or material at all -- one render target, one layer, one
+`TECH_SHADERTOY` technique and one event.  Each of these cost an iteration.
+
+* **`<StartFrame>` / `<EndFrame>` are `unsigned short`, not `int`** (§11's table
+  says int).  `Phoenix/Timeline.h:32` is
+  `unsigned short StartFrame, EndFrame;`, so the ceiling is **65535 frames**
+  and an `<EndFrame>216000</EndFrame>` silently wraps: the player logs
+  `frames [0, 19392)` (216000 - 3x65536) and the event runs for a sixth of the
+  time asked for.  Nothing warns.
+* **A `TECH_SHADERTOY` pass only writes somewhere if the event binds a render
+  target to it.**  `<event><TargetRT>` selects what the final blit *reads*; it
+  does **not** give the pass somewhere to draw.  That needs a `<TechData>` entry
+  in the event:
+  `<materialtexturedata paramid="<PARAM_RENDERTARGET guid>" textureid="<rendertarget guid>"/>`
+  with the parameter declared `<Scope>1</Scope><Type>23</Type>`
+  (`PARAM_VARIABLE`), as Clean Slate's *Mapdistort* does.  Omit it and the pass
+  draws into nothing: black composite, **no `(Err)` line at all**.
+* **`b0.x` in a shadertoy is the event's normalised 0..1 time, not seconds.**
+  `CphxEvent_Shadertoy::Render` fills `ShaderData = {t, aspect, xres, yres}` from
+  the timeline's `t = (Frame - StartFrame) / (EndFrame - StartFrame)` (§11's
+  formula), so a shader that wants seconds multiplies by its own duration.
+* **Author in linear light.**  The final blit uses an sRGB render-target view, so
+  a shadertoy computing display-space colour must output `pow(c, 2.2)` or the
+  frame comes out dark and desaturated.  Useful diagnostic: `--dump-frame F`
+  writes the sRGB back buffer and `F.target.ppm` the linear render target;
+  diffing the two separates an authoring-gamma mistake from a blit bug.
+* **No `<scene>`, `<camera>`, `<model>` or `<material>` is required** for a
+  shadertoy-only project.  The minimal working set is a `<rendertarget>`, a
+  `<renderlayer>`, a `<rendertechnique Type="2">` with one `<Pass>`, and an
+  `<event Type="2">`.  The `Data//Arboretum.xml`, `FilterLibrary.xml` and
+  `MaterialLibrary.xml` warnings on load are pre-existing and harmless when the
+  project has no texgen or materials.
+* `fwidth` / `ddx` / `ddy` work inside a `TECH_SHADERTOY` `p`.  `ddx` of a
+  computed height is a free facet normal, which replaced two extra height-field
+  evaluations and took the pass from 11 ms to 6.1 ms at 1384x779.
+* A `<TimeSpline>` with keys 0->0 and 255->15360 gives a clean linear 0..1 ramp,
+  and a shadertoy declaring only `float4 b0` accepts the engine's
+  `{t, aspect, xres, yres}` plus matrices without complaint.
