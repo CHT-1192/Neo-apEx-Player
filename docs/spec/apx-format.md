@@ -2180,3 +2180,31 @@ camera, model or material at all -- one render target, one layer, one
 * A `<TimeSpline>` with keys 0->0 and 255->15360 gives a clean linear 0..1 ramp,
   and a shadertoy declaring only `float4 b0` accepts the engine's
   `{t, aspect, xres, yres}` plus matrices without complaint.
+
+### Corrections found by building a real 3D scene
+
+Second pass, this time with real geometry: one `Mesh_Plane` at 128x128, three
+instances sharing the model, a vertex shader that displaces and scrolls the
+height field, a pixel shader drawing the neon grid, and a shadertoy layer for the
+sky.  Four more things that cost iterations:
+
+* **A `ParamData` `<Spline>` must contain the spline body directly**
+  (`<interpolation>`, `<key>`, ...).  Wrapping it in an extra `<spline>` element
+  imports with **no error at all** and yields an all-zero spline, so the animated
+  parameter stays 0 -- in this case a scale of 0, i.e. a completely blank scene
+  with a clean log.  This was the expensive bug of the exercise.
+* **There is no time uniform for `TECH_MATERIAL`.**  Animation comes from an
+  animated material parameter (`Scope 2`, `PARAM_FLOAT`) driven by the scene
+  object's `clipdata` `ParamData` spline, and its value is the **normalised 0..1
+  event time**, not seconds -- so any speed expressed in it depends on the
+  event's `EndFrame` unless the shader rescales it.
+* **`ParamData`'s `GroupingGUID` must be the model-object GUID**, not the model's
+  or the scene's.
+* **A layer with `ClearRenderTargets=0` suppresses the depth clear too.**  To
+  composite a shadertoy sky under a scene, the layer needs
+  `ClearRenderTargets=1` with the event carrying `clearcolor=0` and `clearz=1`.
+* Also confirmed: `fwidth`/`ddx`/`ddy` work in a **scene** pixel shader as well,
+  not only in a shadertoy; there is no instancing (N instances == N scene
+  objects sharing one model); and 65535 frames is 18.2 minutes at 60 fps with no
+  way to restart the timeline, so a periodic animation is the way to make it
+  endless.
