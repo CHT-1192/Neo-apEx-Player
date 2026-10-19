@@ -407,6 +407,32 @@ static const PrecalcBlob *PickPrecalcBlob(const std::string &path)
 SETUPCFG setupcfg;
 
 
+// ScreenX/ScreenY are the size the final blit centres and scales the frame into.
+// They must be the back buffer's own size: the blit draws into phxBackBufferView,
+// and the window handler can disagree with it (measured here: it reported
+// 1470x779 while the blit was drawing into a 1600x1000 back buffer).  There is
+// one pair per timeline, and the loading screen has its own -- which is why the
+// loading bar sat off-centre while the demo was already filling the window.
+static void SetBlitSizeFromBackBuffer(CphxTimeline *timeline)
+{
+  if (!timeline || !phxBackBufferView) return;
+  ID3D11Resource *res = nullptr;
+  phxBackBufferView->GetResource(&res);
+  ID3D11Texture2D *tex = nullptr;
+  if (res && SUCCEEDED(res->QueryInterface(__uuidof(ID3D11Texture2D), (void **)&tex)) && tex)
+  {
+    D3D11_TEXTURE2D_DESC desc{};
+    tex->GetDesc(&desc);
+    if (desc.Width && desc.Height)
+    {
+      timeline->ScreenX = (int)desc.Width;
+      timeline->ScreenY = (int)desc.Height;
+    }
+    tex->Release();
+  }
+  if (res) res->Release();
+}
+
 int main(int argc, char **argv)
 {
   Options opt;
@@ -663,6 +689,7 @@ int main(int argc, char **argv)
         for (int e = 0; e < (int)PrecalcProject.Timeline.EventCount; e++)
           if (PrecalcProject.Timeline.Events[e] && PrecalcProject.Timeline.Events[e]->Target) targetted++;
         havePrecalc = targetted > 0;
+        SetBlitSizeFromBackBuffer(&PrecalcProject.Timeline);
         phxvk::LogInfo("loading screen: %s (%d bytes, embedded) loaded, %d event(s), %d with a target%s",
                        precalcBlob->name, precalcBlob->size, (int)PrecalcProject.Timeline.EventCount, targetted,
                        havePrecalc ? "" : " (nothing to blit, so it is not used)");
@@ -979,6 +1006,7 @@ int main(int argc, char **argv)
             lastProgressAt = now;
             ID3D11DepthStencilView *demoDepthView = phxDepthBufferView;
             phxDepthBufferView = precalcDepthView;
+            SetBlitSizeFromBackBuffer(&PrecalcProject.Timeline);
             PrecalcProject.Timeline.Render(pos * 1000.0f, false, false);
             precalcFrames++;
             phxDepthBufferView = demoDepthView;
@@ -1250,30 +1278,7 @@ int main(int argc, char **argv)
     }
 
     tUpdate = NowSteadyMs();
-    // ScreenX/ScreenY are what the final blit centres and scales into.  They
-    // were set once at startup, from the window handler -- and the window
-    // handler can disagree with the back buffer (it reports the size the window
-    // settled on, which is not always the size the swap chain was made at).
-    // The blit draws into phxBackBufferView, so the only size that is certainly
-    // right is that texture's:
-    if (phxBackBufferView)
-    {
-      ID3D11Resource *bbRes = nullptr;
-      phxBackBufferView->GetResource(&bbRes);
-      ID3D11Texture2D *bbTex = nullptr;
-      if (bbRes && SUCCEEDED(bbRes->QueryInterface(__uuidof(ID3D11Texture2D), (void **)&bbTex)) && bbTex)
-      {
-        D3D11_TEXTURE2D_DESC bbDesc{};
-        bbTex->GetDesc(&bbDesc);
-        if (bbDesc.Width && bbDesc.Height)
-        {
-          Project.Timeline->Timeline->ScreenX = (int)bbDesc.Width;
-          Project.Timeline->Timeline->ScreenY = (int)bbDesc.Height;
-        }
-        bbTex->Release();
-      }
-      if (bbRes) bbRes->Release();
-    }
+    SetBlitSizeFromBackBuffer(Project.Timeline->Timeline);
     Project.Timeline->Timeline->EventCount = (unsigned short)Project.Timeline->Events.NumItems();
     Project.Timeline->Timeline->Render(frame, false, false);
     if (fixedDiagLeft > 0)
