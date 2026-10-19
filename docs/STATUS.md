@@ -266,6 +266,27 @@ Two dead ends worth recording so nobody repeats them:
 frame with the update/timeline/generator/dump/present split, and the default
 (250) keeps the log quiet.
 
+## The 3:00 difference is a missing particle cloud, not a rounding error
+
+Frame 21600 (3:00) had been recorded as "13.195 away from the reference" and
+left unexplained.  Putting the two frames side by side answers it: the reference
+is a dense cloud of red spheres and this port draws **one**.  That is not a
+metric drift, it is most of the frame's content gone.
+
+Two leads are dead already:
+
+* the clip-spline bounds check does not reject any valid type -- a run logs zero
+  "clip spline type ... outside" lines, and the project's types (1..20) are all
+  inside `Spline_Count`;
+* it is not a precision or timing difference either: the rest of the frame
+  (background, lighting, the one sphere) is in the right place.
+
+What is left is the `EmitedScene` path: a CPU particle emitter can emit a whole
+sub-scene per particle (`Scene_tool.cpp`'s ForceUpdateContent calls
+`EmitedScene->ForceUpdateContent()`), and that is what the spheres are.  One
+sphere instead of a cloud points at the instance/clip expansion rather than at
+the draw.
+
 ## The loading screen renders. The tool said otherwise.
 
 The loading screen was recorded here as blank -- pure black for

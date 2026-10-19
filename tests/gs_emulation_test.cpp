@@ -529,6 +529,98 @@ void g( triangle VSOUT input[3], inout TriangleStream<GSOUT> OutputStream )
 }
 )GSSRC";
 
+// The four ways a RestartStrip can sit in a body.  Whether the strip layout the
+// emulation builds is exact depends entirely on which one it is, so each is
+// pinned here rather than only in a hostile .apx.
+static const char *kRestartLast = R"GSSRC(
+struct VSIN  { float3 Position : POSITION0; };
+struct VSOUT { float4 Position : SV_POSITION; };
+struct GSOUT { float4 Position : SV_POSITION; };
+VSOUT v(VSIN x) { VSOUT o; o.Position = float4(x.Position,1); return o; }
+[maxvertexcount(6)]
+void g( triangle VSOUT input[3], inout TriangleStream<GSOUT> OutputStream )
+{
+	GSOUT a; a.Position = input[0].Position; OutputStream.Append(a);
+	GSOUT b; b.Position = input[1].Position; OutputStream.Append(b);
+	GSOUT c; c.Position = input[2].Position; OutputStream.Append(c);
+	if (input[0].Position.x > 1.0e9) OutputStream.RestartStrip();
+}
+)GSSRC";
+
+static const char *kRestartBraced = R"GSSRC(
+struct VSIN  { float3 Position : POSITION0; };
+struct VSOUT { float4 Position : SV_POSITION; };
+struct GSOUT { float4 Position : SV_POSITION; };
+VSOUT v(VSIN x) { VSOUT o; o.Position = float4(x.Position,1); return o; }
+[maxvertexcount(6)]
+void g( triangle VSOUT input[3], inout TriangleStream<GSOUT> OutputStream )
+{
+	GSOUT a; a.Position = input[0].Position; OutputStream.Append(a);
+	GSOUT b; b.Position = input[1].Position; OutputStream.Append(b);
+	GSOUT c; c.Position = input[2].Position; OutputStream.Append(c);
+	if (input[0].Position.x > 1.0e9)
+	{
+		OutputStream.RestartStrip();
+	}
+	GSOUT d; d.Position = input[0].Position; OutputStream.Append(d);
+}
+)GSSRC";
+
+static const char *kRestartBracelessThenAppend = R"GSSRC(
+struct VSIN  { float3 Position : POSITION0; };
+struct VSOUT { float4 Position : SV_POSITION; };
+struct GSOUT { float4 Position : SV_POSITION; };
+VSOUT v(VSIN x) { VSOUT o; o.Position = float4(x.Position,1); return o; }
+[maxvertexcount(6)]
+void g( triangle VSOUT input[3], inout TriangleStream<GSOUT> OutputStream )
+{
+	GSOUT a; a.Position = input[0].Position; OutputStream.Append(a);
+	GSOUT b; b.Position = input[1].Position; OutputStream.Append(b);
+	GSOUT c; c.Position = input[2].Position; OutputStream.Append(c);
+	if (input[0].Position.x > 1.0e9) OutputStream.RestartStrip();
+	GSOUT d; d.Position = input[0].Position; OutputStream.Append(d);
+}
+)GSSRC";
+
+// Not conditional at all: the restart runs after the whole if/else, so the
+// static layout is exact and it must emulate.  The first version of the
+// conditional walk refused this.
+static const char *kRestartAfterIfElse = R"GSSRC(
+struct VSIN  { float3 Position : POSITION0; };
+struct VSOUT { float4 Position : SV_POSITION; };
+struct GSOUT { float4 Position : SV_POSITION; };
+VSOUT v(VSIN x) { VSOUT o; o.Position = float4(x.Position,1); return o; }
+[maxvertexcount(6)]
+void g( triangle VSOUT input[3], inout TriangleStream<GSOUT> OutputStream )
+{
+	GSOUT a; a.Position = input[0].Position; OutputStream.Append(a);
+	GSOUT b; b.Position = input[1].Position; OutputStream.Append(b);
+	GSOUT c; c.Position = input[2].Position; OutputStream.Append(c);
+	if (input[0].Position.x > 1.0e9) { GSOUT x; x.Position = input[0].Position; OutputStream.Append(x); } else { }
+	OutputStream.RestartStrip();
+	GSOUT d; d.Position = input[0].Position; OutputStream.Append(d);
+}
+)GSSRC";
+
+static const char *kRestartDynamicLoop = R"GSSRC(
+struct VSIN  { float3 Position : POSITION0; };
+struct VSOUT { float4 Position : SV_POSITION; };
+struct GSOUT { float4 Position : SV_POSITION; };
+VSOUT v(VSIN x) { VSOUT o; o.Position = float4(x.Position,1); return o; }
+[maxvertexcount(6)]
+void g( triangle VSOUT input[3], inout TriangleStream<GSOUT> OutputStream )
+{
+	GSOUT a; a.Position = input[0].Position; OutputStream.Append(a);
+	uint n = (uint)max(1.0, input[0].Position.x);
+	for (uint k = 0; k < n; k++)
+	{
+		OutputStream.Append(a);
+		OutputStream.RestartStrip();
+	}
+}
+)GSSRC";
+
+
 int main()
 {
   printf("gs_emulation: the Wireframe material from Clean Slate\n");
@@ -656,6 +748,33 @@ int main()
   }
 
   printf("\n=============================================\n");
+  // --- where the RestartStrip sits decides whether the layout is exact -----
+  printf("\ngs_emulation: RestartStrip placement\n");
+  {
+    const struct { const char *name; const char *src; bool ok; const char *reason; } cases[] = {
+      { "conditional restart as the last statement", kRestartLast, true, nullptr },
+      { "conditional restart inside braces, Appends after", kRestartBraced, false, "inside a branch" },
+      { "braceless conditional restart, Append after", kRestartBracelessThenAppend, false, "inside a branch" },
+      { "restart after an if/else (runs unconditionally)", kRestartAfterIfElse, true, nullptr },
+      { "restart in a loop whose trip count is not literal", kRestartDynamicLoop, false, "trip count" },
+    };
+    for (const auto &c : cases)
+    {
+      const phxvk::GeometryShaderInfo sh = phxvk::DescribeGeometryShader(c.src, strlen(c.src), "g");
+      const phxvk::GsProgram g = phxvk::AnalyseGeometryShader(c.src, "g", "v", sh);
+      char msg[512];
+      if (g.ok == c.ok)
+        snprintf(msg, sizeof msg, "%s: %s", c.name, c.ok ? "accepted" : "refused");
+      else
+        snprintf(msg, sizeof msg, "%s: expected %s, got %s%s%s", c.name, c.ok ? "accepted" : "refused",
+                 g.ok ? "accepted" : "refused", g.reason.empty() ? "" : ": ", g.reason.c_str());
+      Check(g.ok == c.ok, "%s", msg);
+      if (!c.ok && c.reason)
+        Check(g.reason.find(c.reason) != std::string::npos,
+              "%s: the reason names the cause ('%s', got '%s')", c.name, c.reason, g.reason.c_str());
+    }
+  }
+
   if (g_failures) { printf("%d CHECK(S) FAILED\n", g_failures); return g_failures; }
   printf("ALL CHECKS PASSED\n");
   return 0;
