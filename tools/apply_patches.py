@@ -1242,6 +1242,28 @@ private:""",
         "a blit that reads a different render target than the pass drew into leaves "
         "a blank screen and says nothing.",
     ),
+    (
+        "Phoenix_Tool/Texgen_tool.cpp",
+        """        TS32 id = x;
+        n.GetAttributeAsInteger( _T( "splineid" ), &id );
+        SAFEDELETE( Curves[ id ] );""",
+        """        TS32 id = x;
+        n.GetAttributeAsInteger( _T( "splineid" ), &id );
+        // [port] Curves[] has four entries and `id` comes straight out of the
+        // file.  A splineid of 5 (or 999999) indexed past the array and handed
+        // SAFEDELETE a pointer read from whatever followed it -- a SIGSEGV
+        // during import, before a single frame.  Refuse the spline instead of
+        // corrupting the operator's curve set.
+        if ( id < 0 || id >= (TS32)( sizeof( Curves ) / sizeof( Curves[ 0 ] ) ) )
+        {
+          LOG_ERR( "[texgen] splineid %d is outside the %d curves this operator has; ignoring it",
+                   (int)id, (int)( sizeof( Curves ) / sizeof( Curves[ 0 ] ) ) );
+          continue;
+        }
+        SAFEDELETE( Curves[ id ] );""",
+        "a splineid outside Curves[4] indexed past the array and ran SAFEDELETE on "
+        "whatever followed it.",
+    ),
 ]
 
 

@@ -1362,6 +1362,30 @@ def replace_code(xml, tech, code):
     return xml[:i] + blk[:m.start(1)] + esc(code) + blk[m.end(1):] + xml[j:]
 
 
+
+# Cases cut from Clean Slate instead of the default base: the audit found three
+# unchecked values there that no amount of string surgery on depispace can
+# reach (it has no particle buffers).
+#
+# Not representable at all, and worth saying so rather than pretending: the
+# stored-geometry vectors (`<Poly v3="999999">`, a two-vertex `<Poly>`, a
+# `<Polygons PolyCount>` that disagrees with its PolyData) need an .apx that
+# carries <Poly>/<Polygons>, and **no project in the release does** -- they all
+# reference models instead.  Those readers are unreachable from shipped data;
+# testing them needs a hand-built .apx, which is a different job.
+PARTICLE_CASES = {
+    # Project.cpp:444 -- `<buffersize>N</buffersize>` becomes a particle count
+    # and the allocation is shaped by it.  31 is the interesting value: 1 << 31
+    # is negative as an int, so the count goes below zero before any frame runs.
+    "particle-buffersize-31": sub_once("<buffersize>9</buffersize>", "<buffersize>31</buffersize>"),
+    "particle-buffersize-neg": sub_once("<buffersize>9</buffersize>", "<buffersize>-1</buffersize>"),
+    "particle-buffersize-zero": sub_once("<buffersize>9</buffersize>", "<buffersize>0</buffersize>"),
+    # phxSplineExt.cpp:117 -- splineid indexes an array of spline handles with no
+    # bounds check.  There are four of them.
+    "spline-id-out-of-range": sub_once('<spline splineid="0">', '<spline splineid="5">'),
+    "spline-id-huge": sub_once('<spline splineid="0">', '<spline splineid="999999">'),
+}
+
 def build_cases(tech):
     cases = []  # (name, description, expect, transform)
 
@@ -1456,6 +1480,10 @@ float4 d(HSCTRL c, float3 bary : SV_DomainLocation)
         else:
             fn = sub_once(old, new)
         cases.append((name, "value: %s" % name, "no crash", fn))
+
+    for name, fn in PARTICLE_CASES.items():
+        cases.append((name, "unchecked value in a particle/spline block",
+                      "must not crash the loader", fn))
 
     return cases
 

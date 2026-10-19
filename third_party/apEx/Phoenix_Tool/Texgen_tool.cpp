@@ -454,6 +454,17 @@ void CphxTextureOperator_Tool::ImportData( CXMLNode *Node )
         CXMLNode n = Node->GetChild( _T( "spline" ), x );
         TS32 id = x;
         n.GetAttributeAsInteger( _T( "splineid" ), &id );
+        // [port] Curves[] has four entries and `id` comes straight out of the
+        // file.  A splineid of 5 (or 999999) indexed past the array and handed
+        // SAFEDELETE a pointer read from whatever followed it -- a SIGSEGV
+        // during import, before a single frame.  Refuse the spline instead of
+        // corrupting the operator's curve set.
+        if ( id < 0 || id >= (TS32)( sizeof( Curves ) / sizeof( Curves[ 0 ] ) ) )
+        {
+          LOG_ERR( "[texgen] splineid %d is outside the %d curves this operator has; ignoring it",
+                   (int)id, (int)( sizeof( Curves ) / sizeof( Curves[ 0 ] ) ) );
+          continue;
+        }
         SAFEDELETE( Curves[ id ] );
         Curves[ id ] = new CphxSpline_Tool_float16();
         Curves[ id ]->ImportData( n );
