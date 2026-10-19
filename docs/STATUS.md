@@ -237,6 +237,18 @@ initialisation, not the shim.
 
 Two dead ends worth recording so nobody repeats them:
 
+* **`--preheat` halves the event stall and is opt-in, not default.**  Calling
+  `ForceUpdateContent()`/`UpdateMaterialState()` for every event before playback
+  moves the engine's `update` half of the hitch into the loading screen
+  (update 692 -> 0 ms at frame 341) but not the `timeline` half, which is the
+  event's first *draw* -- pipelines, descriptors, texture uploads.  Net: the
+  hitch goes 1412 -> 805 ms on Clean Slate, and loading goes 5.4 -> 7.0 s of
+  generation.  Half a second for 1.6 s of loading is not a default, so
+  `--preheat` turns it on.  My first read of this measurement said the stall was
+  gone, because the grep used to filter the log was `[0-9]{4,}` and quietly
+  dropped every frame under a second -- the same class of mistake as the
+  single-frame dump above, committed by me twice in one session.
+
 * **A persistent `VkPipelineCache` was implemented, measured, and reverted.**  It
   looked like a 5x win on two frames (timeline 1357 -> 189 ms at frame 0), but
   that measurement was contaminated: the first run after a rebuild pays Metal's

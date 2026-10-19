@@ -80,6 +80,7 @@ struct Options
   bool noAudio = false; // --no-audio: never open an output device
   int frameTimeoutMs = 5000; // --frame-timeout; 0 disables the watchdog
   int slowFrameMs = 250;     // --slow-frame-ms; report frames slower than this (0 = all)
+  bool preheat = false;      // --preheat; off by default, see the measured trade-off in STATUS.md
   // The release player puts its setup dialog in front of everything else
   // (apEx/MinimalPlayer/MinimalPlayer.cpp:147, `if ( OpenSetupDialog( Strings ) )`,
   // and only then InitWindow), and this player does the same: src/player/ui.cpp
@@ -113,6 +114,9 @@ static void Usage(const char *argv0)
           "  --no-audio           never open an audio device\n"
           "  --no-ui              skip the setup dialog and start playing immediately\n"
           "                       (what the scripts in ci/ and tools/ pass)\n"
+          "  --preheat            initialise every event before playback.  Halves each\n"
+          "                       event's first-frame stall (1412 -> 805 ms on Clean\n"
+          "                       Slate) but costs 1.6 s of loading, so it is opt-in\n"
           "  --slow-frame-ms MS   report any frame slower than MS (default 250; 0 =\n"
           "                       every frame), with update/timeline/present broken out\n"
           "  --frame-timeout MS   abort if a single frame exceeds MS (default 5000;\n"
@@ -154,6 +158,8 @@ static bool ParseArgs(int argc, char **argv, Options &o)
     else if (a == "--no-audio") o.noAudio = true;
     else if (a == "--frame-timeout") o.frameTimeoutMs = atoi(next("--frame-timeout"));
     else if (a == "--slow-frame-ms") o.slowFrameMs = atoi(next("--slow-frame-ms"));
+    else if (a == "--preheat") o.preheat = true;
+    else if (a == "--no-preheat") o.preheat = false;
     else if (a == "--ui") o.enableUi = true;
     else if (a == "--no-ui") o.enableUi = false;
     else if (a == "--headless")
@@ -1090,6 +1096,38 @@ int main(int argc, char **argv)
   int exitCode = 0;
   int fixedDiagLeft = 3;
   long long lastLoggedFrame = -1;
+  // The first frame of every event pays the engine's lazy initialisation:
+  // ForceUpdateContent() builds the scene's render data and UpdateMaterialState()
+  // builds a shadertoy's material.  Measured on Clean Slate that is a 645 ms
+  // stall on the frame event 20 starts -- in the middle of playback, on the
+  // frame the event becomes visible.  Doing the same work here moves it into the
+  // loading screen, and the resource queue it fills is drained before the first
+  // frame rather than during it.
+  if (opt.preheat && Project.Timeline)
+  {
+    const uint64_t t0 = NowSteadyMs();
+    CphxTimeline_Tool *tt = Project.Timeline;
+    int initialised = 0;
+    for (TS32 i = 0; i < tt->Events.NumItems(); i++)
+    {
+      CphxEvent_Tool *e = tt->Events[i];
+      if (!e->Event) continue;
+      if (e->Type == EVENT_RENDERSCENE)
+      {
+        CphxEvent_RenderScene_Tool *rs = (CphxEvent_RenderScene_Tool *)e;
+        if (rs->Scene) { rs->Scene->ForceUpdateContent(); initialised++; }
+      }
+      else if (e->Type == EVENT_SHADERTOY)
+      {
+        ((CphxEvent_Shadertoy_Tool *)e)->UpdateMaterialState();
+        initialised++;
+      }
+      ProcessGeneratorQueue(200, &device);
+    }
+    phxvk::LogInfo("preheat: %d of %d event(s) initialised in %.0f ms", initialised,
+                   (int)tt->Events.NumItems(), (double)(NowSteadyMs() - t0));
+  }
+
   while (!phxDone)
   {
     watchdog.Tick((long long)clock.Frame());
