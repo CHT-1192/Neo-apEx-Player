@@ -51,7 +51,8 @@ SongPcm LoadSongPcm(const char *path);
 
 // Looks for a playable rendering of `mvmPath`:
 //   1. <mvmPath>.apxsndcache          (exactly what the Windows tool writes)
-//   2. the same name with .apxsndcache / .wav / .ogg / .mp3 substituted
+//   2. the same name with .apxsndcache / .wav substituted (the only two
+//      containers LoadSongPcm() can decode)
 //   3. SoundCache/<djb2-of-the-mvm>.apxsndcache next to it, which is where the
 //      Windows tool puts it (phxSongBase::OfflineRender)
 // Returns an invalid SongPcm with an empty `source` when there is nothing to

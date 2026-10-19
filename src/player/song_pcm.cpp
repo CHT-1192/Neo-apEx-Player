@@ -230,8 +230,10 @@ SongPcm FindSongPcm(const char *mvmPath, std::string *searched)
     candidates.push_back(mvm + ".apxsndcache"); // the literal name the tool writes
     candidates.push_back(base + ".apxsndcache");
     candidates.push_back(base + ".wav");
-    candidates.push_back(base + ".ogg");
-    candidates.push_back(base + ".mp3");
+    // No .ogg / .mp3: LoadSongPcm() decodes RIFF/WAVE and the tool's !CSA
+    // container and nothing else, so listing them only promised a format this
+    // build cannot open -- a file dropped there was silently skipped and the
+    // player fell through to the wall clock.
   }
 
   // SoundCache/<djb2>.apxsndcache, the tool's own location.  It is relative to
