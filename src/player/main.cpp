@@ -708,6 +708,9 @@ int main(int argc, char **argv)
   // from the release setup data (Phoenix/Project.cpp:286-287).
   Project.Timeline->Timeline->ScreenX = window.GetXRes();
   Project.Timeline->Timeline->ScreenY = window.GetYRes();
+  phxvk::LogInfo("window %dx%d, back buffer %dx%d (the timeline blits into the former)",
+                 (int)window.GetXRes(), (int)window.GetYRes(),
+                 (int)Project.Timeline->Timeline->ScreenX, (int)Project.Timeline->Timeline->ScreenY);
 
   {
     // ApplyRenderTargets() only gives an event a Target when its <TargetRT> GUID
@@ -1246,6 +1249,30 @@ int main(int argc, char **argv)
     }
 
     tUpdate = NowSteadyMs();
+    // ScreenX/ScreenY are what the final blit centres and scales into.  They
+    // were set once at startup, from the window handler -- and the window
+    // handler can disagree with the back buffer (it reports the size the window
+    // settled on, which is not always the size the swap chain was made at).
+    // The blit draws into phxBackBufferView, so the only size that is certainly
+    // right is that texture's:
+    if (phxBackBufferView)
+    {
+      ID3D11Resource *bbRes = nullptr;
+      phxBackBufferView->GetResource(&bbRes);
+      ID3D11Texture2D *bbTex = nullptr;
+      if (bbRes && SUCCEEDED(bbRes->QueryInterface(__uuidof(ID3D11Texture2D), (void **)&bbTex)) && bbTex)
+      {
+        D3D11_TEXTURE2D_DESC bbDesc{};
+        bbTex->GetDesc(&bbDesc);
+        if (bbDesc.Width && bbDesc.Height)
+        {
+          Project.Timeline->Timeline->ScreenX = (int)bbDesc.Width;
+          Project.Timeline->Timeline->ScreenY = (int)bbDesc.Height;
+        }
+        bbTex->Release();
+      }
+      if (bbRes) bbRes->Release();
+    }
     Project.Timeline->Timeline->EventCount = (unsigned short)Project.Timeline->Events.NumItems();
     Project.Timeline->Timeline->Render(frame, false, false);
     if (fixedDiagLeft > 0)
