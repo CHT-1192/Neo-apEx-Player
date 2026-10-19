@@ -1264,6 +1264,23 @@ private:""",
         "a splineid outside Curves[4] indexed past the array and ran SAFEDELETE on "
         "whatever followed it.",
     ),
+    (
+        "Phoenix/Timeline.cpp",
+        """    D3D11_VIEWPORT v = { ( ScreenX - Target->XRes ) / 2.0f, ( ScreenY - Target->YRes ) / 2.0f, (float)Target->XRes, (float)Target->YRes, 0, 1 };""",
+        """    // [port] Fill the window keeping the frame's aspect ratio, and centre it on
+    // both axes.  The release blits at the target's native size, which is exact
+    // on a 1280x720 window and leaves a black border everywhere else -- and an
+    // uneven one, because the offset centres the TARGET rather than the scaled
+    // image.  When the window already matches the target, scale is 1 and this
+    // reduces to the original values, so reference frames are unaffected.
+    float blitScale = ScreenX / (float)Target->XRes;
+    const float blitScaleY = ScreenY / (float)Target->YRes;
+    if ( blitScaleY < blitScale ) blitScale = blitScaleY;
+    const float blitW = Target->XRes * blitScale, blitH = Target->YRes * blitScale;
+    D3D11_VIEWPORT v = { ( ScreenX - blitW ) / 2.0f, ( ScreenY - blitH ) / 2.0f, blitW, blitH, 0, 1 };\n    { static int n = 0; if ( n++ < 3 ) { printf( "[blit] window %dx%d, target %dx%d -> viewport %.1f,%.1f %.1fx%.1f\\n", (int)ScreenX, (int)ScreenY, (int)Target->XRes, (int)Target->YRes, v.TopLeftX, v.TopLeftY, v.Width, v.Height ); fflush( stdout ); } }""",
+        "the final blit drew the frame at its native size, so any window that is "
+        "not exactly the project's resolution gets uneven black borders.",
+    ),
 ]
 
 

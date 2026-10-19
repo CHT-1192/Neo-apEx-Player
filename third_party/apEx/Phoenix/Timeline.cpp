@@ -403,7 +403,18 @@ void CphxTimeline::Render( float Frame, bool tool, bool subroutine )
     Prepare2dRender();
     phxContext->PSSetShader( RenderPixelShader, NULL, 0 );
 
-    D3D11_VIEWPORT v = { ( ScreenX - Target->XRes ) / 2.0f, ( ScreenY - Target->YRes ) / 2.0f, (float)Target->XRes, (float)Target->YRes, 0, 1 };
+    // [port] Fill the window keeping the frame's aspect ratio, and centre it on
+    // both axes.  The release blits at the target's native size, which is exact
+    // on a 1280x720 window and leaves a black border everywhere else -- and an
+    // uneven one, because the offset centres the TARGET rather than the scaled
+    // image.  When the window already matches the target, scale is 1 and this
+    // reduces to the original values, so reference frames are unaffected.
+    float blitScale = ScreenX / (float)Target->XRes;
+    const float blitScaleY = ScreenY / (float)Target->YRes;
+    if ( blitScaleY < blitScale ) blitScale = blitScaleY;
+    const float blitW = Target->XRes * blitScale, blitH = Target->YRes * blitScale;
+    D3D11_VIEWPORT v = { ( ScreenX - blitW ) / 2.0f, ( ScreenY - blitH ) / 2.0f, blitW, blitH, 0, 1 };
+    { static int n = 0; if ( n++ < 3 ) { printf( "[blit] window %dx%d, target %dx%d -> viewport %.1f,%.1f %.1fx%.1f\n", (int)ScreenX, (int)ScreenY, (int)Target->XRes, (int)Target->YRes, v.TopLeftX, v.TopLeftY, v.Width, v.Height ); fflush( stdout ); } }
     phxContext->RSSetViewports( 1, &v );
     phxContext->OMSetRenderTargets( 1, &phxBackBufferView, NULL );
     phxContext->PSSetShaderResources( 0, 1, &Target->View );
