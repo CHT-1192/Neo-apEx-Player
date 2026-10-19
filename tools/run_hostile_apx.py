@@ -74,8 +74,15 @@ def one_case(player, path, frames, budget):
     # once per case.  The flag sets it too, but exporting it here means it is in
     # place before the process starts.
     env = dict(os.environ, NEO_APEX_HEADLESS="1", SDL_MAC_BACKGROUND_APP="1")
+    # The player's own per-frame budget defaults to 5 s and exists to keep a real
+    # hang from freezing the desktop.  Here it is the wrong watchdog: this script
+    # already kills the whole process group on --timeout, and running cases in
+    # parallel makes a slow-but-perfectly-fine frame (gs-6-restart-middle builds
+    # two strip segments on a real project) exceed 5 s.  That turned a pass into
+    # exit(70), so give the player room and let the outer watchdog decide.
     proc = subprocess.Popen([player, path, "--headless", "--no-ui", "--no-audio", "--no-vsync",
-                             "--fixed-fps", "--frames", str(frames)], env=env,
+                             "--fixed-fps", "--frame-timeout", "600000",
+                             "--frames", str(frames)], env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             text=True, errors="replace", start_new_session=True)
     try:
