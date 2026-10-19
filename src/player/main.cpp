@@ -79,6 +79,7 @@ struct Options
   std::string music;   // --music FILE: explicit pre-rendered track
   bool noAudio = false; // --no-audio: never open an output device
   int frameTimeoutMs = 5000; // --frame-timeout; 0 disables the watchdog
+  int slowFrameMs = 250;     // --slow-frame-ms; report frames slower than this (0 = all)
   // The release player puts its setup dialog in front of everything else
   // (apEx/MinimalPlayer/MinimalPlayer.cpp:147, `if ( OpenSetupDialog( Strings ) )`,
   // and only then InitWindow), and this player does the same: src/player/ui.cpp
@@ -112,6 +113,8 @@ static void Usage(const char *argv0)
           "  --no-audio           never open an audio device\n"
           "  --no-ui              skip the setup dialog and start playing immediately\n"
           "                       (what the scripts in ci/ and tools/ pass)\n"
+          "  --slow-frame-ms MS   report any frame slower than MS (default 250; 0 =\n"
+          "                       every frame), with update/timeline/present broken out\n"
           "  --frame-timeout MS   abort if a single frame exceeds MS (default 5000;\n"
           "                       0 disables it).  A hung frame would otherwise take\n"
           "                       the whole desktop with it.\n"
@@ -150,6 +153,7 @@ static bool ParseArgs(int argc, char **argv, Options &o)
     else if (a == "--music") o.music = next("--music");
     else if (a == "--no-audio") o.noAudio = true;
     else if (a == "--frame-timeout") o.frameTimeoutMs = atoi(next("--frame-timeout"));
+    else if (a == "--slow-frame-ms") o.slowFrameMs = atoi(next("--slow-frame-ms"));
     else if (a == "--ui") o.enableUi = true;
     else if (a == "--no-ui") o.enableUi = false;
     else if (a == "--headless")
@@ -1257,7 +1261,7 @@ int main(int argc, char **argv)
     // almost always the first frame on which some event's content is needed.
     {
       const uint64_t tPresent = NowSteadyMs();
-      if (tPresent - tFrame >= kSlowFrameMs)
+      if (tPresent - tFrame >= (uint64_t)opt.slowFrameMs)
       {
         char active[512];
         int used = 0;

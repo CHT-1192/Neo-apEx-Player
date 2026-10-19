@@ -205,6 +205,55 @@ recording, two of them correctness bugs:
   that a sign had been consumed: `atoi("+")` is 0, so `k < +abc` read as a trip
   count of zero.  It now requires at least one digit.
 
+## Performance, measured against real hardware
+
+Somebody's laptop RTX 4060 runs this demo at **80 fps peak, 42 fps low** (a
+comment from 2023).  A 10-core M5 sits at roughly that same tier -- between a
+laptop 4060 and a 5060, mostly nearer the 4060.  So the reference point for
+"is this port slow" is 12.5-24 ms per frame, not the 8.3 ms the demo was
+authored against.
+
+Measured on the M5, per frame, 1200 frames of Clean Slate (`--slow-frame-ms 25`):
+
+```
+frames slower than 25 ms: 930 of 1200
+median 32 ms   p90 37 ms   max 1788 ms
+over 100 ms: 2      over 250: 2      over 1000: 2
+```
+
+So steady state is **~1.3x the reference's low frame**, with a D3D11-to-Vulkan
+translation layer and the geometry-shader emulation in between.  That is not a
+frame-rate problem.  What it is, is **two stalls**: frame 0 (1788 ms, loading)
+and frame 341 (1456-1026 ms), and frame 341 is simply the first frame of event
+20 -- a new event starting.  Its breakdown says where those milliseconds are:
+
+```
+slow frame 341: 672 ms (update 645, timeline 7, generator 0, dump 0, present 20)
+```
+
+`update` is the engine initialising the event; `timeline` -- every draw we issue
+-- is single-digit milliseconds.  So the stall is the original's own lazy event
+initialisation, not the shim.
+
+Two dead ends worth recording so nobody repeats them:
+
+* **A persistent `VkPipelineCache` was implemented, measured, and reverted.**  It
+  looked like a 5x win on two frames (timeline 1357 -> 189 ms at frame 0), but
+  that measurement was contaminated: the first run after a rebuild pays Metal's
+  shader compilation regardless, and MoltenVK already caches what it can.  Three
+  runs each, cold and warm, put `timeline` at 9-13 ms cold and 4-7 ms warm, and
+  the wall clock for 420 frames never moved outside 16.8-18.5 s for either.  The
+  code did not pay for itself and was removed.
+
+* **Sampling the process before it has finished loading measures the loader.**
+  A `sample(1)` taken 3 s in reported 69% in `vkWaitForFences` and 31% in
+  `PrepareDraw`, which looked like a per-frame pipeline rebuild; it was the
+  texture generator and a one-off compilation.  Wait for steady state.
+
+`--slow-frame-ms MS` now exists to make this reproducible: `0` reports every
+frame with the update/timeline/generator/dump/present split, and the default
+(250) keeps the log quiet.
+
 ## The loading screen renders. The tool said otherwise.
 
 The loading screen was recorded here as blank -- pure black for
