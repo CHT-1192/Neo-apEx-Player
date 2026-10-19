@@ -19,6 +19,7 @@ Writes REPORT.md next to the logs so a run can be reviewed later.
 
 import argparse
 import collections
+import concurrent.futures
 import os
 import re
 import signal
@@ -48,6 +49,19 @@ NOTE_PATTERNS = [
     ("pipeline fail", re.compile(r"vkCreateGraphicsPipelines failed.*")),
     ("no rt", re.compile(r"no render targets were created.*")),
 ]
+
+
+# Cases whose whole point is to make the engine complain.  Their error count is
+# not a failure signal: these mutations remove something the project depends on,
+# so the engine says so -- loudly.  Anything not listed here is still compared
+# against the baseline (the missing Data//*.xml files and the "target layer not
+# found" lines every real project produces), so a case that starts logging more
+# than it used to still shows up.
+EXPECTED_NOISY = {
+    "struct-drop-rendertargets":
+        "removes the render target block, so every material that references one logs "
+        "'Rendertarget not found' each frame",
+}
 
 
 def one_case(player, path, frames, budget):
@@ -105,6 +119,9 @@ def one_case(player, path, frames, budget):
         verdict = "exit(%d)" % status
     elif errors:
         verdict = "errors(%d)" % len(errors)
+        expected = EXPECTED_NOISY.get(os.path.basename(path)[:-4])
+        if expected:
+            verdict += " (expected)"
     else:
         verdict = "ok"
 
@@ -121,6 +138,10 @@ def main():
     ap.add_argument("--timeout", type=float, default=90.0, help="seconds per case")
     ap.add_argument("--only", default="")
     ap.add_argument("--logs", default="", help="directory for per-case logs")
+    ap.add_argument("--jobs", type=int, default=1,
+                    help="how many cases to run at once (each is its own process; "
+                         "the work is nearly all project loading, so this is close to "
+                         "a straight win, but keep it modest on a small GPU)")
     args = ap.parse_args()
 
     if not os.path.exists(args.player):
@@ -135,21 +156,36 @@ def main():
 
     print("%-34s %-12s %7s  %s" % ("case", "verdict", "sec", "note"))
     print("-" * 100)
-    results = []
-    for name in cases:
+    def run_one(index_name):
+        index, name = index_name
         path = os.path.join(args.dir, name)
         r = one_case(args.player, path, args.frames, args.timeout)
         r["name"] = name[:-4]
-        results.append(r)
         if args.logs:
             with open(os.path.join(args.logs, name[:-4] + ".log"), "w") as f:
                 f.write("\n".join(r["log"]) + "\n")
         note = "; ".join("%s=%s" % (k, v) if v else k for k, v in r["notes"].items())
+        expected = EXPECTED_NOISY.get(name[:-4])
+        if expected:
+            note = (note + "; " if note else "") + "expected: " + expected
         if not note and r["errors"]:
             note = r["errors"][0]
-        print("%-34s %-12s %7.1f  %s" % (r["name"], r["verdict"], r["elapsed"], note[:70]))
+        return index, r, note
+
+    # Cases are already separate processes with their own watchdog, so running
+    # several at once changes nothing about what is being measured -- it just
+    # stops a 110-case sweep from being an hour of waiting.  Rows print in
+    # completion order and are reported in case order.
+    results = [None] * len(cases)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.jobs)) as pool:
+        futures = [pool.submit(run_one, (i, n)) for i, n in enumerate(cases)]
+        for future in concurrent.futures.as_completed(futures):
+            index, r, note = future.result()
+            results[index] = r
+            print("%-34s %-12s %7.1f  %s" % (r["name"], r["verdict"], r["elapsed"], note[:70]))
 
     # The interesting ones, in full.
+    results = [r for r in results if r is not None]
     bad = [r for r in results if r["verdict"] != "ok"]
     print()
     print("=" * 100)
