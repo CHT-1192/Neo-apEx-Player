@@ -1282,6 +1282,70 @@ private:""",
         "not exactly the project's resolution gets uneven black borders.",
     ),
     (
+        "Phoenix_Tool/Scene_tool.cpp",
+        """void CphxScene_Tool::SimulateParticles()
+{
+  TU32 t = globalTimer.GetTime();
+  if ( LastParticleTime == 0 ) LastParticleTime = t;
+
+  if ( t - LastParticleTime > 1000 ) LastParticleTime = t - 1000;
+
+  for ( TS32 x = 0; x < Objects.NumItems(); x++ )
+    if ( Objects[ x ]->GetObjectType() == Object_ParticleEmitterCPU )
+    {
+      CphxObject_ParticleEmitter_CPU_Tool *p = (CphxObject_ParticleEmitter_CPU_Tool*)Objects[ x ];
+      p->SimulateParticles( ( t - LastParticleTime ) / 1000.0f );
+    }
+
+  LastParticleTime = t;
+}
+""",
+        """float phxFixedParticleStep = 0.0f;
+
+void CphxScene_Tool::SimulateParticles()
+{
+  // [port] Fixed step when the player is stepping at a fixed rate (see above).
+  TU32 t = globalTimer.GetTime();
+  if ( LastParticleTime == 0 ) LastParticleTime = t;
+
+  if ( t - LastParticleTime > 1000 ) LastParticleTime = t - 1000;
+
+  for ( TS32 x = 0; x < Objects.NumItems(); x++ )
+    if ( Objects[ x ]->GetObjectType() == Object_ParticleEmitterCPU )
+    {
+      CphxObject_ParticleEmitter_CPU_Tool *p = (CphxObject_ParticleEmitter_CPU_Tool*)Objects[ x ];
+      p->SimulateParticles( phxFixedParticleStep > 0 ? phxFixedParticleStep : ( t - LastParticleTime ) / 1000.0f );
+    }
+
+  // [port] A sub-scene is its own CphxScene, so its emitters are not in this
+  // scene's Objects list and the loop above never reached them -- every particle
+  // system living inside a sub-scene stayed dead.  Recurse the way
+  // ForceUpdateContent() does.  The depth cap is because a sub-scene may point
+  // back at an ancestor and this runs every frame.
+  static int particleDepth = 0;
+  if ( particleDepth < 8 )
+  {
+    particleDepth++;
+    for ( TS32 x = 0; x < Objects.NumItems(); x++ )
+      if ( Objects[ x ]->GetObjectType() == Object_SubScene )
+      {
+        CphxObject_SubScene_Tool *o = (CphxObject_SubScene_Tool*)Objects[ x ];
+        CArray< CphxScene_Tool* > scenes;
+        for ( int y = 0; y < Clips.NumItems(); y++ )
+          if ( o->GetClip( y ) && o->GetClip( y )->GetSubSceneTarget() )
+            scenes.AddUnique( o->GetClip( y )->GetSubSceneTarget() );
+        for ( int y = 0; y < scenes.NumItems(); y++ )
+          scenes[ y ]->SimulateParticles();
+      }
+    particleDepth--;
+  }
+
+  LastParticleTime = t;
+}
+""",
+        "particles were never stepped when they lived in a sub-scene, and the step came from the wall clock, which is wrong for a fixed-step render.",
+    ),
+    (
         "Phoenix/Scene.cpp",
         """void CphxObject_ParticleEmitter_CPU::CreateRenderDataInstances( int Clip, const D3DXMATRIX &m, CphxScene *RootScene, void *SubSceneData )
 {
@@ -1292,8 +1356,11 @@ private:""",
   // hold; how many are ALIVE is what decides whether anything is drawn, and the
   // sub-scene path draws nothing at all when the count is zero.  Say which.
   {
+    // Only report emitters that actually have something to say: a live particle,
+    // or a non-zero emission rate.  A silent emitter says nothing and is
+    // indistinguishable from one that is not there.
     static int reported = 0;
-    if ( reported < 8 )
+    if ( reported < 8 && ( Particles[ 0 ].LifeLeft > 0 || SplineResults[ Spline_Particle_EmissionPerSecond ] > 0 ) )
     {
       reported++;
       const int slots = 1 << BufferSize;
@@ -1308,34 +1375,7 @@ private:""",
   }
 
   Clips[ Clip ]->MaterialSplines->ApplyToParameters( this );""",
-        "the sub-scene particle path draws nothing when no particle is alive, and "
-        "says nothing either.",
-    ),
-    (
-        "Phoenix_Tool/Scene_tool.cpp",
-        """void CphxScene_Tool::SimulateParticles()
-{
-  TU32 t = globalTimer.GetTime();""",
-        """// [port] The particle step comes from globalTimer, i.e. the wall clock.  That
-// is right in real time -- and wrong for an offline render, which draws frames
-// far faster than they play: at 1100 fps the step is 0.9 ms instead of 8.3, so
-// particles spawn about nine times too slowly and a dumped frame does not match
-// the same frame of the released video.  When the player steps at a fixed rate
-// it sets this and the step comes from the timeline instead; zero means "use the
-// wall clock", which is the original behaviour.
-float phxFixedParticleStep = 0.0f;
-
-void CphxScene_Tool::SimulateParticles()
-{
-  TU32 t = globalTimer.GetTime();""",
-        "the particle simulation is driven by the wall clock, which makes offline "
-        "frame dumps disagree with real-time playback.",
-    ),
-    (
-        "Phoenix_Tool/Scene_tool.cpp",
-        """      p->SimulateParticles( ( t - LastParticleTime ) / 1000.0f );""",
-        """      p->SimulateParticles( phxFixedParticleStep > 0 ? phxFixedParticleStep : ( t - LastParticleTime ) / 1000.0f );""",
-        "feed the fixed step when the player is stepping at a fixed rate.",
+        "the sub-scene particle path draws nothing when no particle is alive, and says nothing either.",
     ),
 ]
 

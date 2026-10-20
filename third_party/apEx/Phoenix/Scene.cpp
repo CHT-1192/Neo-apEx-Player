@@ -306,6 +306,20 @@ void CphxObject::CalculateAnimation( int Clip, float t )
     // reachable from this translation unit, so it is silent.
     if ( (int)s->Type < 0 || (int)s->Type >= Spline_Count ) continue;
     SplineResults[ s->Type ] = s->Spline->Value[ 0 ];
+    // [port] diagnostic: the emission spline exists in the project with a key of
+    // its own, yet SplineResults[Spline_Particle_EmissionPerSecond] arrives at
+    // the particle engine as 0.  KeyCount says whether the key survived the
+    // tool->runtime conversion at all.
+    if ( s->Type == Spline_Particle_EmissionPerSecond )
+    {
+      static int n40 = 0;
+      if ( n40++ < 8 )
+      {
+        printf( "[spline40] t=%.3f keys=%d value0=%.4f loopt=%d\n", t, (int)s->Spline->KeyCount,
+                s->Spline->Value[ 0 ], (int)s->Spline->Loop );
+        fflush( stdout );
+      }
+    }
     if ( s->Type == Spline_Rotation ) RotationResult = s->Spline->GetQuaternion();
   }
 
@@ -616,8 +630,11 @@ void CphxObject_ParticleEmitter_CPU::CreateRenderDataInstances( int Clip, const 
   // hold; how many are ALIVE is what decides whether anything is drawn, and the
   // sub-scene path draws nothing at all when the count is zero.  Say which.
   {
+    // Only report emitters that actually have something to say: a live particle,
+    // or a non-zero emission rate.  A silent emitter says nothing and is
+    // indistinguishable from one that is not there.
     static int reported = 0;
-    if ( reported < 8 )
+    if ( reported < 8 && ( Particles[ 0 ].LifeLeft > 0 || SplineResults[ Spline_Particle_EmissionPerSecond ] > 0 ) )
     {
       reported++;
       const int slots = 1 << BufferSize;

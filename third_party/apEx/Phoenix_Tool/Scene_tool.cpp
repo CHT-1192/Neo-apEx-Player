@@ -1020,17 +1020,17 @@ TS32 CphxScene_Tool::GetTriCount()
   return TriCount;
 }
 
-// [port] The particle step comes from globalTimer, i.e. the wall clock.  That
-// is right in real time -- and wrong for an offline render, which draws frames
-// far faster than they play: at 1100 fps the step is 0.9 ms instead of 8.3, so
-// particles spawn about nine times too slowly and a dumped frame does not match
-// the same frame of the released video.  When the player steps at a fixed rate
-// it sets this and the step comes from the timeline instead; zero means "use the
-// wall clock", which is the original behaviour.
+// [port] The particle step comes from globalTimer, i.e. the wall clock.  That is
+// right in real time and wrong for an offline render, which draws frames far
+// faster than they play: at 1100 fps the step is 0.9 ms instead of 8.3, so
+// particles age nine times too slowly and a dumped frame cannot be compared with
+// a real-time recording.  The player sets this to one frame's worth of time when
+// it steps at a fixed rate; zero means "use the wall clock", the original.
 float phxFixedParticleStep = 0.0f;
 
 void CphxScene_Tool::SimulateParticles()
 {
+  // [port] Fixed step when the player is stepping at a fixed rate (see above).
   TU32 t = globalTimer.GetTime();
   if ( LastParticleTime == 0 ) LastParticleTime = t;
 
@@ -1042,6 +1042,29 @@ void CphxScene_Tool::SimulateParticles()
       CphxObject_ParticleEmitter_CPU_Tool *p = (CphxObject_ParticleEmitter_CPU_Tool*)Objects[ x ];
       p->SimulateParticles( phxFixedParticleStep > 0 ? phxFixedParticleStep : ( t - LastParticleTime ) / 1000.0f );
     }
+
+  // [port] A sub-scene is its own CphxScene, so its emitters are not in this
+  // scene's Objects list and the loop above never reached them -- every particle
+  // system living inside a sub-scene stayed dead.  Recurse the way
+  // ForceUpdateContent() does.  The depth cap is because a sub-scene may point
+  // back at an ancestor and this runs every frame.
+  static int particleDepth = 0;
+  if ( particleDepth < 8 )
+  {
+    particleDepth++;
+    for ( TS32 x = 0; x < Objects.NumItems(); x++ )
+      if ( Objects[ x ]->GetObjectType() == Object_SubScene )
+      {
+        CphxObject_SubScene_Tool *o = (CphxObject_SubScene_Tool*)Objects[ x ];
+        CArray< CphxScene_Tool* > scenes;
+        for ( int y = 0; y < Clips.NumItems(); y++ )
+          if ( o->GetClip( y ) && o->GetClip( y )->GetSubSceneTarget() )
+            scenes.AddUnique( o->GetClip( y )->GetSubSceneTarget() );
+        for ( int y = 0; y < scenes.NumItems(); y++ )
+          scenes[ y ]->SimulateParticles();
+      }
+    particleDepth--;
+  }
 
   LastParticleTime = t;
 }
