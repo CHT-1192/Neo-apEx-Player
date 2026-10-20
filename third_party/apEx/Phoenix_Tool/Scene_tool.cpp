@@ -2917,8 +2917,12 @@ void CphxObject_ParticleEmitter_CPU_Tool::AllocateMaterialState()
 
 void CphxObject_ParticleEmitter_CPU_Tool::SimulateParticles( TF32 ElapsedTime )
 {
-  if ( obj->VertexBuffer )
-    obj->UpdateParticles( ElapsedTime );
+  // [port] The VertexBuffer guard belongs to the sprite path.  An emitter that
+  // draws a mesh or a sub-scene per particle never gets one, so this skipped
+  // simulation for exactly the emitters that need it most -- their particles
+  // were never born, and a cloud of them simply did not exist.  Simulate always,
+  // and only ask for the buffer upload when there is a buffer to upload into.
+  obj->UpdateParticles( ElapsedTime, obj->VertexBuffer != nullptr );
 }
 
 void CphxObject_ParticleEmitter_CPU_Tool::CreateSplines( CphxObjectClip_Tool *Clip )
