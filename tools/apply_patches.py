@@ -1283,6 +1283,24 @@ private:""",
     ),
     (
         "Phoenix_Tool/Scene_tool.cpp",
+        """void CphxObject_ParticleEmitter_CPU_Tool::SimulateParticles( TF32 ElapsedTime )
+{
+  if ( obj->VertexBuffer )
+    obj->UpdateParticles( ElapsedTime );
+}""",
+        """void CphxObject_ParticleEmitter_CPU_Tool::SimulateParticles( TF32 ElapsedTime )
+{
+  // [port] The VertexBuffer guard belongs to the sprite path.  An emitter that
+  // draws a mesh or a sub-scene per particle never gets one, so this skipped
+  // simulation for exactly the emitters that need it most -- their particles
+  // were never born, and a cloud of them simply did not exist.  Simulate always,
+  // and only ask for the buffer upload when there is a buffer to upload into.
+  obj->UpdateParticles( ElapsedTime, obj->VertexBuffer != nullptr );
+}""",
+        "an emitter that draws a mesh or a sub-scene per particle has no vertex buffer, and the guard skipped its simulation entirely.",
+    ),
+    (
+        "Phoenix_Tool/Scene_tool.cpp",
         """void CphxScene_Tool::SimulateParticles()
 {
   TU32 t = globalTimer.GetTime();
@@ -1300,9 +1318,7 @@ private:""",
   LastParticleTime = t;
 }
 """,
-        """float phxFixedParticleStep = 0.0f;
-
-void CphxScene_Tool::SimulateParticles()
+        """void CphxScene_Tool::SimulateParticles()
 {
   // [port] Fixed step when the player is stepping at a fixed rate (see above).
   TU32 t = globalTimer.GetTime();
@@ -1327,7 +1343,14 @@ void CphxScene_Tool::SimulateParticles()
   {
     particleDepth++;
     for ( TS32 x = 0; x < Objects.NumItems(); x++ )
-      if ( Objects[ x ]->GetObjectType() == Object_SubScene )
+      if ( Objects[ x ]->GetObjectType() == Object_ParticleEmitterCPU )
+      {
+        // An emitter can emit a whole sub-scene per particle; that scene is
+        // reachable only from here, and its own emitters need stepping too.
+        CphxObject_ParticleEmitter_CPU_Tool *pe = (CphxObject_ParticleEmitter_CPU_Tool*)Objects[ x ];
+        if ( pe->EmitedScene ) pe->EmitedScene->SimulateParticles();
+      }
+      else if ( Objects[ x ]->GetObjectType() == Object_SubScene )
       {
         CphxObject_SubScene_Tool *o = (CphxObject_SubScene_Tool*)Objects[ x ];
         CArray< CphxScene_Tool* > scenes;
@@ -1360,40 +1383,26 @@ void CphxScene_Tool::SimulateParticles()
     // or a non-zero emission rate.  A silent emitter says nothing and is
     // indistinguishable from one that is not there.
     static int reported = 0;
-    if ( reported < 8 && ( Particles[ 0 ].LifeLeft > 0 || SplineResults[ Spline_Particle_EmissionPerSecond ] > 0 ) )
+    static int calls = 0;
+    calls++;
+    // first few, and then every 500th call so a short run shows the counter move
+    if ( reported < 8 ? ( Particles[ 0 ].LifeLeft > 0 || SplineResults[ Spline_Particle_EmissionPerSecond ] > 0 )
+                      : ( calls % 2000 ) == 0 )
     {
       reported++;
       const int slots = 1 << BufferSize;
       int alive = 0;
       for ( int y = 0; y < slots; y++ )
         if ( Particles[ y ].LifeLeft > 0 ) alive++;
-      printf( "[particles] buffersize %d = %d slots, %d alive, LiveCount %d, Ticks %.3f, emit-scene %d, emit-mesh %d, emit/s %.4f, aging %d\\n",
+      printf( "[particles] buffersize %d = %d slots, %d alive, LiveCount %d, Ticks %.3f, emit-scene %d, emit-mesh %d, emit/s %.4f, aging %d, spawns %lld\\n",
               (int)BufferSize, slots, alive, (int)LiveCount, Ticks, SceneToEmit ? 1 : 0, ObjectToEmit ? 1 : 0,
-              SplineResults[ Spline_Particle_EmissionPerSecond ], Aging ? 1 : 0 );
+              SplineResults[ Spline_Particle_EmissionPerSecond ], Aging ? 1 : 0, g_particleSpawns );
       fflush( stdout );
     }
   }
 
   Clips[ Clip ]->MaterialSplines->ApplyToParameters( this );""",
         "the sub-scene particle path draws nothing when no particle is alive, and says nothing either.",
-    ),
-    (
-        "Phoenix_Tool/Scene_tool.cpp",
-        """void CphxObject_ParticleEmitter_CPU_Tool::SimulateParticles( TF32 ElapsedTime )
-{
-  if ( obj->VertexBuffer )
-    obj->UpdateParticles( ElapsedTime );
-}""",
-        """void CphxObject_ParticleEmitter_CPU_Tool::SimulateParticles( TF32 ElapsedTime )
-{
-  // [port] The VertexBuffer guard belongs to the sprite path.  An emitter that
-  // draws a mesh or a sub-scene per particle never gets one, so this skipped
-  // simulation for exactly the emitters that need it most -- their particles
-  // were never born, and a cloud of them simply did not exist.  Simulate always,
-  // and only ask for the buffer upload when there is a buffer to upload into.
-  obj->UpdateParticles( ElapsedTime, obj->VertexBuffer != nullptr );
-}""",
-        "an emitter that draws a mesh or a sub-scene per particle has no vertex buffer, and the guard skipped its simulation entirely.",
     ),
 ]
 

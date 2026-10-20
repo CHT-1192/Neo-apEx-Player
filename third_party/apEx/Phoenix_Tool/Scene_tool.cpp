@@ -1053,7 +1053,14 @@ void CphxScene_Tool::SimulateParticles()
   {
     particleDepth++;
     for ( TS32 x = 0; x < Objects.NumItems(); x++ )
-      if ( Objects[ x ]->GetObjectType() == Object_SubScene )
+      if ( Objects[ x ]->GetObjectType() == Object_ParticleEmitterCPU )
+      {
+        // An emitter can emit a whole sub-scene per particle; that scene is
+        // reachable only from here, and its own emitters need stepping too.
+        CphxObject_ParticleEmitter_CPU_Tool *pe = (CphxObject_ParticleEmitter_CPU_Tool*)Objects[ x ];
+        if ( pe->EmitedScene ) pe->EmitedScene->SimulateParticles();
+      }
+      else if ( Objects[ x ]->GetObjectType() == Object_SubScene )
       {
         CphxObject_SubScene_Tool *o = (CphxObject_SubScene_Tool*)Objects[ x ];
         CArray< CphxScene_Tool* > scenes;

@@ -285,6 +285,22 @@ void CphxEvent_ParticleCalc::Render( float t, float prevt, float aspect, bool su
         p->UpdateParticles( ( tme - lasttime ) / 1000.0f, false );
     }
 
+  // [port] diagnostic: this event is what actually advances particles, so if it
+  // is not reached, or its dt is zero, every emitter in the project stands still
+  // while still reporting a non-zero emission rate.
+  {
+    static int n = 0;
+    if ( n++ < 8 )
+    {
+      int emitters = 0;
+      for ( int x = 0; x < Scene->ObjectCount; x++ )
+        if ( Scene->Objects[ x ]->ObjectType == Object_ParticleEmitterCPU ) emitters++;
+      printf( "[pcalc] t=%.4f tme=%d lasttime=%d dt=%.5f s, %d object(s), %d emitter(s)\n",
+              t, tme, lasttime, ( tme - lasttime ) / 1000.0f, (int)Scene->ObjectCount, emitters );
+      fflush( stdout );
+    }
+  }
+
   lasttime = tme;
   lastt = t;
 }

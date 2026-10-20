@@ -390,8 +390,13 @@ void CphxObject_SubScene::CreateRenderDataInstances( int Clip, const D3DXMATRIX 
 //}
 
 #ifdef PHX_OBJ_EMITTERCPU
+// [port] Cumulative count of particles born since start, so a run can tell
+// "never spawns" from "spawns but is not drawn".
+static long long g_particleSpawns = 0;
+
 void CphxObject_ParticleEmitter_CPU::SpawnParticle( float t, D3DXMATRIX &m, D3DXMATRIX &o, float mt )
 {
+  g_particleSpawns++;
   int idx = -1;
   int minlife = Particles[ 0 ].LifeLeft;
   int particlecount = 1 << BufferSize;
@@ -634,16 +639,20 @@ void CphxObject_ParticleEmitter_CPU::CreateRenderDataInstances( int Clip, const 
     // or a non-zero emission rate.  A silent emitter says nothing and is
     // indistinguishable from one that is not there.
     static int reported = 0;
-    if ( reported < 8 && ( Particles[ 0 ].LifeLeft > 0 || SplineResults[ Spline_Particle_EmissionPerSecond ] > 0 ) )
+    static int calls = 0;
+    calls++;
+    // first few, and then every 500th call so a short run shows the counter move
+    if ( reported < 8 ? ( Particles[ 0 ].LifeLeft > 0 || SplineResults[ Spline_Particle_EmissionPerSecond ] > 0 )
+                      : ( calls % 2000 ) == 0 )
     {
       reported++;
       const int slots = 1 << BufferSize;
       int alive = 0;
       for ( int y = 0; y < slots; y++ )
         if ( Particles[ y ].LifeLeft > 0 ) alive++;
-      printf( "[particles] buffersize %d = %d slots, %d alive, LiveCount %d, Ticks %.3f, emit-scene %d, emit-mesh %d, emit/s %.4f, aging %d\n",
+      printf( "[particles] buffersize %d = %d slots, %d alive, LiveCount %d, Ticks %.3f, emit-scene %d, emit-mesh %d, emit/s %.4f, aging %d, spawns %lld\n",
               (int)BufferSize, slots, alive, (int)LiveCount, Ticks, SceneToEmit ? 1 : 0, ObjectToEmit ? 1 : 0,
-              SplineResults[ Spline_Particle_EmissionPerSecond ], Aging ? 1 : 0 );
+              SplineResults[ Spline_Particle_EmissionPerSecond ], Aging ? 1 : 0, g_particleSpawns );
       fflush( stdout );
     }
   }

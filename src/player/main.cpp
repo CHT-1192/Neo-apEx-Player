@@ -1173,6 +1173,33 @@ int main(int argc, char **argv)
                    (int)tt->Events.NumItems(), (double)(NowSteadyMs() - t0));
   }
 
+  // What the timeline actually contains, before a single frame is drawn: the
+  // particle section's behaviour depends on whether an EVENT_PARTICLECALC event
+  // covers it, and that is a load-time fact, not something to discover by
+  // rendering three minutes of demo and watching a counter.
+  if (Project.Timeline && Project.Timeline->Timeline)
+  {
+    CphxTimeline_Tool *tt = Project.Timeline;
+    phxvk::LogInfo("timeline: %d event(s); type counts follow", (int)tt->Events.NumItems());
+    int byType[8] = {0};
+    for (TS32 i = 0; i < tt->Events.NumItems(); i++)
+    {
+      CphxEvent_Tool *e = tt->Events[i];
+      if (!e || !e->Event) continue;
+      const int ty = (int)e->Type;
+      if (ty >= 0 && ty < 8) byType[ty]++;
+      if (ty == 4 /* PARTICLECALC */ || ty == 3 /* RENDERSCENE */)
+      {
+        void *scene = (ty == 4) ? (void *)((CphxEvent_ParticleCalc *)e->Event)->Scene
+                                : (void *)((CphxEvent_RenderScene *)e->Event)->Scene;
+        phxvk::LogInfo("  event %d: type %d frames [%d, %d) scene %p", (int)i, ty,
+                       (int)e->Event->StartFrame, (int)e->Event->EndFrame, scene);
+      }
+    }
+    phxvk::LogInfo("  renderdemo %d, shadertoy %d, renderscene %d, particlecalc %d, camshake %d, camoverride %d",
+                   byType[1], byType[2], byType[3], byType[4], byType[5], byType[6]);
+  }
+
   while (!phxDone)
   {
     watchdog.Tick((long long)clock.Frame());
