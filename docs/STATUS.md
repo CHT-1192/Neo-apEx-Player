@@ -266,6 +266,33 @@ Two dead ends worth recording so nobody repeats them:
 frame with the update/timeline/generator/dump/present split, and the default
 (250) keeps the log quiet.
 
+## Particles were never simulated at all
+
+`grep SimulateParticles()` over the vendored tree returns exactly one hit: the
+definition.  The editor's frame loop (`../apEx/apExRoot.cpp`, not vendored) was
+the only caller, and the player replaced that loop without it -- so no particle
+system ever advanced.  `Ticks` never accumulated, no particle was ever born, and
+an emitter that draws a sub-scene or a mesh per particle drew nothing.
+
+Wired into the player's per-active-scene loop.  Two consequences worth knowing:
+
+* The particle step is taken from the wall clock (`globalTimer.GetTime()` inside
+  `CphxScene_Tool::SimulateParticles`).  That is right in real time and wrong for
+  `--fixed-fps`, which draws frames far faster than they play: at 1100 fps the
+  step is 0.9 ms instead of 8.3 and everything moves nine times too slowly.  The
+  player now feeds one frame's worth of time when it steps at a fixed rate, via a
+  `[port]` global in Scene_tool.cpp; zero means "wall clock", the original
+  behaviour.
+
+* With the step fixed, the emitter measured at 3:00 still reports
+  `emit/s 0.0000`, so that particular cloud is still missing.  The project has 57
+  `<clipspline type="40">` (emission) entries, so the spline evaluates rather
+  than being absent; what is left to explain is why it reads zero at that moment.
+
+The 0:31 frame is unchanged by this (3.286 against the video, in line with the
+3.09-3.23 range recorded before), which is what a fix that only affects particle
+systems should look like.
+
 ## The 3:00 difference is a missing particle cloud, not a rounding error
 
 Frame 21600 (3:00) had been recorded as "13.195 away from the reference" and

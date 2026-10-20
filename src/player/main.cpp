@@ -433,6 +433,11 @@ static void SetBlitSizeFromBackBuffer(CphxTimeline *timeline)
   if (res) res->Release();
 }
 
+// Defined in Phoenix_Tool/Scene_tool.cpp (a [port] addition there).  The engine
+// steps particles by the wall clock, which is wrong when --fixed-fps renders
+// frames far faster than they play; this makes the step the timeline's instead.
+extern float phxFixedParticleStep;
+
 int main(int argc, char **argv)
 {
   Options opt;
@@ -863,6 +868,14 @@ int main(int argc, char **argv)
   double fps = opt.fpsOverride > 0 ? opt.fpsOverride : (double)timeline->FrameRate;
   if (fps <= 0) fps = 120.0;
 
+  // A fixed-step render must advance the simulation by exactly one frame's worth
+  // of time, not by however long the frame took to draw: at 1100 fps the wall
+  // clock gives 0.9 ms instead of 8.3 and particles spawn nine times too slowly,
+  // so a dumped frame does not match the same frame of the real-time release.
+  phxFixedParticleStep = opt.fixedFps ? (float)(1.0 / fps) : 0.0f;
+  phxvk::LogInfo("[particles] fixed step %.5f s (fixedFps %d, fps %.2f)", phxFixedParticleStep,
+                 opt.fixedFps ? 1 : 0, fps);
+
   std::string songPath = opt.song;
   if (songPath.empty())
   {
@@ -1267,7 +1280,15 @@ int main(int argc, char **argv)
           if (e->Type == EVENT_RENDERSCENE)
           {
             CphxEvent_RenderScene_Tool *rs = (CphxEvent_RenderScene_Tool *)e;
-            if (rs->Scene) rs->Scene->ForceUpdateContent();
+            if (rs->Scene)
+            {
+              rs->Scene->ForceUpdateContent();
+              // The editor's frame loop called this; nothing in the vendored tree
+              // does, so particles never simulated -- Ticks never accumulated,
+              // no particle was ever alive, and a sub-scene-emitting emitter drew
+              // nothing at all.  That is the missing cloud at 3:00.
+              rs->Scene->SimulateParticles();
+            }
           }
           else if (e->Type == EVENT_SHADERTOY)
           {

@@ -1020,6 +1020,15 @@ TS32 CphxScene_Tool::GetTriCount()
   return TriCount;
 }
 
+// [port] The particle step comes from globalTimer, i.e. the wall clock.  That
+// is right in real time -- and wrong for an offline render, which draws frames
+// far faster than they play: at 1100 fps the step is 0.9 ms instead of 8.3, so
+// particles spawn about nine times too slowly and a dumped frame does not match
+// the same frame of the released video.  When the player steps at a fixed rate
+// it sets this and the step comes from the timeline instead; zero means "use the
+// wall clock", which is the original behaviour.
+float phxFixedParticleStep = 0.0f;
+
 void CphxScene_Tool::SimulateParticles()
 {
   TU32 t = globalTimer.GetTime();
@@ -1031,7 +1040,7 @@ void CphxScene_Tool::SimulateParticles()
     if ( Objects[ x ]->GetObjectType() == Object_ParticleEmitterCPU )
     {
       CphxObject_ParticleEmitter_CPU_Tool *p = (CphxObject_ParticleEmitter_CPU_Tool*)Objects[ x ];
-      p->SimulateParticles( ( t - LastParticleTime ) / 1000.0f );
+      p->SimulateParticles( phxFixedParticleStep > 0 ? phxFixedParticleStep : ( t - LastParticleTime ) / 1000.0f );
     }
 
   LastParticleTime = t;

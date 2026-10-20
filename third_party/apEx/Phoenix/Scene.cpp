@@ -612,6 +612,25 @@ void CphxObject_ParticleEmitter_CPU::UpdateParticles( float elapsedtime, bool up
 
 void CphxObject_ParticleEmitter_CPU::CreateRenderDataInstances( int Clip, const D3DXMATRIX &m, CphxScene *RootScene, void *SubSceneData )
 {
+  // [port] diagnostic: `1 << BufferSize` is how many particles this emitter can
+  // hold; how many are ALIVE is what decides whether anything is drawn, and the
+  // sub-scene path draws nothing at all when the count is zero.  Say which.
+  {
+    static int reported = 0;
+    if ( reported < 8 )
+    {
+      reported++;
+      const int slots = 1 << BufferSize;
+      int alive = 0;
+      for ( int y = 0; y < slots; y++ )
+        if ( Particles[ y ].LifeLeft > 0 ) alive++;
+      printf( "[particles] buffersize %d = %d slots, %d alive, LiveCount %d, Ticks %.3f, emit-scene %d, emit-mesh %d, emit/s %.4f, aging %d\n",
+              (int)BufferSize, slots, alive, (int)LiveCount, Ticks, SceneToEmit ? 1 : 0, ObjectToEmit ? 1 : 0,
+              SplineResults[ Spline_Particle_EmissionPerSecond ], Aging ? 1 : 0 );
+      fflush( stdout );
+    }
+  }
+
   Clips[ Clip ]->MaterialSplines->ApplyToParameters( this );
 
   //update dynamic material variables
