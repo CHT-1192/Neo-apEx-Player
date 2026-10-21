@@ -17,27 +17,19 @@ name: MVX (Windows)
 # redistribution with attribution, so shipping it here is what lets this job run
 # the real synthesiser instead of a stub.
 
-# Triggered only by changes that can alter the render.  It used to run on every
-# push to main, which meant ~87 MB of artifact per commit: 30 pushes produced
-# 2.57 GB of Actions storage for files that are reproducible by this job and
-# only wanted occasionally.  A push that touches the player's C++ cannot change
-# what the Windows synthesizer produces.
+# Manual only (Actions -> MVX (Windows) -> Run workflow).
+#
+# This job renders the demo's music with the closed-source Windows synthesiser.
+# It is a tool you run when you want the file, not a check that a commit can
+# break: the player's tests do not read the result, and the .mvm it consumes
+# changes about once in the life of the project.  Triggering it on push meant
+# ~87 MB of artifact per commit and 2.57 GB of Actions storage for thirty
+# commits, none of which anything in the repository ever downloaded.
+#
+# If a change does need a render, run it from the Actions tab; the artifact is
+# kept for three days.
+
 on:
-  push:
-    branches: [main]
-    paths:
-      - "tools/mvx_render.cpp"
-      - "demo/step010padding.mvm"
-      - "third_party/apEx/Libraries/MVX/**"
-      - "third_party/apEx/MVX/**"
-      - ".github/workflows/mvx-windows.yml"
-  pull_request:
-    paths:
-      - "tools/mvx_render.cpp"
-      - "demo/step010padding.mvm"
-      - "third_party/apEx/Libraries/MVX/**"
-      - "third_party/apEx/MVX/**"
-      - ".github/workflows/mvx-windows.yml"
   workflow_dispatch:
 
 concurrency:
