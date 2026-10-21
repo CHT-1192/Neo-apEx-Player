@@ -80,6 +80,8 @@ struct Options
   bool noAudio = false; // --no-audio: never open an output device
   int frameTimeoutMs = 5000; // --frame-timeout; 0 disables the watchdog
   int slowFrameMs = 250;     // --slow-frame-ms; report frames slower than this (0 = all)
+  int renderFps = 0;         // --render-fps; cap how fast an offline run renders (0 = unlimited)
+  int yieldPct = 0;          // --yield; sleep this percentage of each frame's cost (0 = never)
   bool preheat = false;      // --preheat; off by default, see the measured trade-off in STATUS.md
   // The release player puts its setup dialog in front of everything else
   // (apEx/MinimalPlayer/MinimalPlayer.cpp:147, `if ( OpenSetupDialog( Strings ) )`,
@@ -118,6 +120,13 @@ static void Usage(const char *argv0)
           "  --preheat            initialise every event before playback.  Halves each\n"
           "                       event's first-frame stall (1412 -> 805 ms on Clean\n"
           "                       Slate) but costs 1.6 s of loading, so it is opt-in\n"
+          "  --yield PCT          after each frame, sleep PCT% of what that frame cost.\n"
+          "                       50 halves the load (and doubles the wall time) no matter\n"
+          "                       how fast the frames are\n"
+          "  --render-fps N       after each frame, sleep to cap the render rate at N fps.\n"
+          "                       --fixed-fps renders as fast as the machine allows, which\n"
+          "                       pegs the GPU for the whole run; a background measurement\n"
+          "                       usually wants 30 or 60 instead\n"
           "  --slow-frame-ms MS   report any frame slower than MS (default 250; 0 =\n"
           "                       every frame), with update/timeline/present broken out\n"
           "  --frame-timeout MS   abort if a single frame exceeds MS (default 5000;\n"
@@ -159,6 +168,8 @@ static bool ParseArgs(int argc, char **argv, Options &o)
     else if (a == "--no-audio") o.noAudio = true;
     else if (a == "--frame-timeout") o.frameTimeoutMs = atoi(next("--frame-timeout"));
     else if (a == "--slow-frame-ms") o.slowFrameMs = atoi(next("--slow-frame-ms"));
+    else if (a == "--render-fps") o.renderFps = atoi(next("--render-fps"));
+    else if (a == "--yield") o.yieldPct = atoi(next("--yield"));
     else if (a == "--preheat") o.preheat = true;
     else if (a == "--no-preheat") o.preheat = false;
     else if (a == "--ui") o.enableUi = true;
@@ -1399,6 +1410,25 @@ int main(int argc, char **argv)
                        (double)(tTimeline - tUpdate), (double)(tGenerator - tTimeline), (double)(tDump - tGenerator),
                        (double)(tPresent - tDump), active);
       }
+    }
+
+    if (opt.yieldPct > 0)
+    {
+      // A duty cycle, not a rate cap: it stays effective when a frame costs more
+      // than the cap's budget, which is the usual case here.
+      const uint64_t spent = NowSteadyMs() - tFrame;
+      const uint64_t nap = spent * (uint64_t)opt.yieldPct / 100u;
+      if (nap) SDL_Delay((Uint32)nap);
+    }
+
+    if (opt.renderFps > 0)
+    {
+      // --fixed-fps draws as fast as the machine allows, so a long offline run
+      // holds the GPU at 100% for its whole length.  A measurement that only
+      // needs a counter does not have to do that.
+      const uint64_t budgetMs = 1000 / (uint64_t)opt.renderFps;
+      const uint64_t spent = NowSteadyMs() - tFrame;
+      if (spent < budgetMs) SDL_Delay((Uint32)(budgetMs - spent));
     }
 
     if (opt.fixedFps) clock.AdvanceFixedStep();

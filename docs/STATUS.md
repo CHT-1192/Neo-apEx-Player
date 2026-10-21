@@ -207,6 +207,13 @@ recording, two of them correctness bugs:
 
 ## Performance, measured against real hardware
 
+**Read the numbers below with the machine's load in mind.**  Re-measuring the
+same 600 frames later in the day gave 79 ms/frame at 320x180 and 277 ms/frame
+for 100 frames of the same work -- a 3-5x spread on identical code, because
+something else was using the machine.  Frame timings from a desktop that is
+being used are not comparable with each other unless they were taken back to
+back.
+
 Somebody's laptop RTX 4060 runs this demo at **80 fps peak, 42 fps low** (a
 comment from 2023).  A 10-core M5 sits at roughly that same tier -- between a
 laptop 4060 and a 5060, mostly nearer the 4060.  So the reference point for
