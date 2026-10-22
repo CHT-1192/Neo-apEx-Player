@@ -1,45 +1,85 @@
 name: MVX (Windows)
 
-# Renders the demo's music with the ORIGINAL MVX synthesiser.
+# Renders music with the ORIGINAL MVX synthesiser.
 #
 # MVX is closed source: the apEx release ships mvx.h plus x86-32 MSVC static
 # libraries, and nothing else.  It therefore cannot be ported to the player's own
 # platforms, but it does not need to be - it runs natively on 32-bit Windows, and
 # GitHub's windows-latest runners execute x86-32 through WoW64.  That makes this
-# job the one place the real synth can be run as part of the build.
+# job the one place the real synth can be run at all.
 #
-# The result is a WAV, uploaded as an artifact, which the portable player then
-# plays with `--music` (its clock follows the audio play cursor, so picture and
-# sound share a timebase).
+# The result is a WAV (to listen to) and the tool's own SoundCache container
+# (the file the portable player actually consumes: it carries the tick markers
+# the clock is driven from).  The player picks a track up from disk with
+# `--music`; picture and sound then share one timebase.
 #
-# The .mvm is committed at demo/step010padding.mvm.  It is Conspiracy's released
-# music data under CC BY-NC 4.0, which restricts commercial use but permits
-# redistribution with attribution, so shipping it here is what lets this job run
-# the real synthesiser instead of a stub.
+# The song data under demo/music/ is Conspiracy's, released under CC BY-NC 4.0:
+# redistribution with attribution, no commercial use.  See LICENSES.md.
 
 # Manual only (Actions -> MVX (Windows) -> Run workflow).
 #
-# This job renders the demo's music with the closed-source Windows synthesiser.
-# It is a tool you run when you want the file, not a check that a commit can
-# break: the player's tests do not read the result, and the .mvm it consumes
-# changes about once in the life of the project.  Triggering it on push meant
-# ~87 MB of artifact per commit and 2.57 GB of Actions storage for thirty
-# commits, none of which anything in the repository ever downloaded.
-#
-# If a change does need a render, run it from the Actions tab; the artifact is
-# kept for three days.
-
+# This is a tool you run when you want the files, not a check that a commit can
+# break: nothing in the repository consumes the output, and the song data changes
+# about once in the life of the project.  Triggering it on push once produced
+# 2.57 GB of Actions storage for thirty commits that nobody downloaded.
 on:
   workflow_dispatch:
+    inputs:
+      only:
+        description: "Render just one song (file name without .mvm), or leave empty for all"
+        required: false
+        default: ""
+      upload:
+        description: "Upload the SoundCaches as artifacts (roughly 40 MB each, kept 3 days)"
+        type: choice
+        options: ["false", "true"]
+        default: "false"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # One entry per .mvm the apEx release ships, which is one per bundled project
+  # plus two alternates.  Keeping the list here rather than deriving it means a
+  # typo fails loudly instead of silently rendering eight of ten.
+  ALL_SONGS: >-
+    step010padding step010 unintendedconsequence016 e0015_roughmaster
+    off0021_things purge015-sh purge015 dissipate_007c_noglitch
+    veins022-rc3 impending-013-fullcut
+
 jobs:
+  pick:
+    # A matrix cannot be computed from an input directly, so this tiny job turns
+    # "all" or "one" into the list the render jobs fan out over.
+    runs-on: ubuntu-latest
+    outputs:
+      songs: ${{ steps.list.outputs.songs }}
+    steps:
+      - id: list
+        env:
+          ONLY: ${{ inputs.only }}
+        run: |
+          set -eu
+          songs="${{ env.ALL_SONGS }}"
+          if [ -n "$ONLY" ]; then
+            case " $songs " in
+              *" $ONLY "*) songs="$ONLY" ;;
+              *) echo "::error title=unknown song::'$ONLY' is not in the list: $songs"; exit 1 ;;
+            esac
+          fi
+          json=$(printf '%s\n' $songs | sed 's/.*/"&"/' | paste -sd, -)
+          echo "songs=[$json]" >> "$GITHUB_OUTPUT"
+          echo "rendering: $songs"
+
   render-music:
+    needs: pick
     runs-on: windows-latest
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        song: ${{ fromJSON(needs.pick.outputs.songs) }}
 
     steps:
       - uses: actions/checkout@v4
@@ -77,36 +117,38 @@ jobs:
              /OUT:mvx_render.exe
           dir mvx_render.exe
 
-      - name: Render the music
+      - name: Render ${{ matrix.song }}
         id: render
         # cmd, not bash: a loader failure (a missing import, say) surfaces as
         # exit 127 "command not found" under Git Bash, which says nothing about
         # why.  cmd prints the real Windows error.
         shell: cmd
         run: |
-          dir demo\step010padding.mvm
           rem Two outputs: a WAV to listen to, and the tool's own SoundCache
           rem container, which the player discovers on its own.
-          mvx_render.exe demo\step010padding.mvm cleanslate-music.wav cleanslate.apxsndcache
+          dir demo\music\${{ matrix.song }}.mvm
+          mvx_render.exe demo\music\${{ matrix.song }}.mvm ${{ matrix.song }}.wav ${{ matrix.song }}.apxsndcache
           if errorlevel 1 (
             echo ::error title=mvx_render failed::exit %errorlevel%
             exit /b 1
           )
-          dir cleanslate-music.wav cleanslate.apxsndcache
-          echo rendered=true>> "%GITHUB_OUTPUT%"
+          dir ${{ matrix.song }}.wav ${{ matrix.song }}.apxsndcache
 
       - name: Check the render is real audio
-        if: steps.render.outputs.rendered == 'true'
         shell: pwsh
         run: |
           # A song that came out as zeros would mean the harness linked but the
           # mixer never actually ran, which a byte count alone cannot tell.
-          $bytes = [System.IO.File]::ReadAllBytes("cleanslate-music.wav")
-          if ($bytes.Length -lt 44) { throw "the WAV is only $($bytes.Length) bytes" }
-          $dataBytes = $bytes.Length - 44
-          # 284 s of 44100 Hz stereo s16 is ~50 MB; anything wildly short means
-          # the loop stopped early.
-          if ($dataBytes -lt 40MB) { throw "only $dataBytes bytes of audio, expected ~50 MB" }
+          $name = "${{ matrix.song }}"
+          $wav = "$name.wav"
+          $bytes = [System.IO.File]::ReadAllBytes($wav)
+          if ($bytes.Length -lt 44) { throw "$name.wav is only $($bytes.Length) bytes" }
+
+          # Duration comes from the file, not from a constant: the songs differ
+          # in length by an order of magnitude, and the point of this check is
+          # that the mixer ran to the end of THIS one.
+          $seconds = [Math]::Round(($bytes.Length - 44) / 4 / 44100, 1)
+          if ($seconds -lt 10) { throw "$name.wav is $seconds s long, which is not a song" }
 
           $nonzero = 0; $peak = 0
           for ($i = 44; $i -lt $bytes.Length - 1; $i += 512) {
@@ -117,26 +159,29 @@ jobs:
             if ($v -ne 0) { $nonzero++ }
             if ($v -gt $peak) { $peak = $v }
           }
-          Write-Host "non-zero probes: $nonzero, peak: $peak"
-          if ($nonzero -eq 0) { throw "the rendered WAV is silent" }
-          if ($peak -lt 1000) { throw "the rendered WAV peaks at only $peak, which is not music" }
+          if ($nonzero -eq 0) { throw "$name.wav is silent" }
+          if ($peak -lt 1000) { throw "$name.wav peaks at only $peak, which is not music" }
 
           # The cache container must carry the same payload plus the tick markers.
-          $c = [System.IO.File]::ReadAllBytes("cleanslate.apxsndcache")
+          $c = [System.IO.File]::ReadAllBytes("$name.apxsndcache")
           $magic = [System.Text.Encoding]::ASCII.GetString($c, 0, 4)
           if ($magic -ne "!CSA") { throw "cache magic is '$magic', expected '!CSA'" }
-          Write-Host "cache: $($c.Length) bytes, magic ok"
+
+          $line = "| {0} | {1} s | {2} MB | peak {3} | {4} MB cache, {5} bytes |" -f `
+                  $name, $seconds, [Math]::Round($bytes.Length/1MB,1), $peak,
+                  [Math]::Round($c.Length/1MB,1), $c.Length
+          Write-Host $line
+          $line | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
       - name: Upload the rendered music
-        if: steps.render.outputs.rendered == 'true'
+        # Off by default: ten of these is ~400 MB of Actions storage for files
+        # that are reproducible by re-running this job.
+        if: inputs.upload == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: cleanslate-music
+          name: music-${{ matrix.song }}
           path: |
-            cleanslate-music.wav
-            cleanslate.apxsndcache
-          # Three days, not thirty.  These two files are ~87 MB together and
-          # nothing in the repository consumes them -- the macOS player reads a
-          # track from disk when one is put next to the project.  Long enough to
-          # grab after a run, short enough not to accumulate.
+            ${{ matrix.song }}.wav
+            ${{ matrix.song }}.apxsndcache
+          # Three days, not thirty.
           retention-days: 3

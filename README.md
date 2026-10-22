@@ -33,16 +33,23 @@ The demo is in the repository, so that is the whole thing. **Esc** quits; there
 is no pause and no seek, because the original player had neither.
 
 Without the music it still plays — silently, on the wall clock, which reproduces
-the original's frame timing exactly. To get the sound:
+the original's frame timing exactly.
+
+The synthesizer is 32-bit Windows code, so it cannot run here. The song data for
+**every** bundled project is in `demo/music/`, and the `MVX (Windows)` workflow
+renders any of it on a Windows runner (Actions → MVX (Windows) → Run workflow):
 
 ```sh
-gh run download --name cleanslate-music          # CI renders it on Windows
-mv cleanslate.apxsndcache demo/step010padding.apxsndcache
+gh workflow run mvx-windows.yml -f only=step010padding -f upload=true
+gh run download --name music-step010padding
 ```
 
-The synthesizer is 32-bit Windows code, so it cannot run here; the cache carries
-the tick markers the player uses to drive the picture from the audio.
-`--music FILE` takes a 16-bit PCM WAV instead, if you have one.
+By default that workflow only *verifies* each song — non-silent, plausible
+length, valid cache — and uploads nothing, because ten rendered tracks are ~400 MB
+of artifact for files that can be re-rendered on demand. Ask for `upload=true`
+when you actually want the files. Put the `.apxsndcache` next to the project (or
+in `SoundCache/`) and the player finds it; `--music FILE` also takes a 16-bit PCM
+WAV.
 
 ## Recording it
 

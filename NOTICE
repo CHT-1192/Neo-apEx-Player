@@ -10,7 +10,9 @@ This product includes material from the Conspiracy apEx source release
     Projects/ is not vendored (the demo lives in demo/ here) and the release's
     own README is not included.
 
-  * the Clean Slate project and song data in demo/.  Clean Slate is a 64k
+  * the Clean Slate project and song data in demo/, and the song data in
+    demo/music/ -- the .mvm files the apEx release ships, one per bundled
+    project.  Clean Slate is a 64k
     intro by Conspiracy -- BoyC (code, additional graphics), Gargaj (audio,
     modelling, editing) and zoom (visuals, direction) -- released at Revision
     2021, where it took first place in the pc 64k competition

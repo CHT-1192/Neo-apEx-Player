@@ -8,7 +8,7 @@ and it matters: one of the two licences below forbids commercial use.
 | `src/`, `tools/`, `tests/`, `docs/`, `ci/`, `cmake/`, `.github/`, `.claude/`, `.dshrc`, `CMakeLists.txt`, `README.md`, `NOTICE` | **Apache License 2.0** | [`LICENSE`](LICENSE) |
 | `third_party/apEx/` | **CC BY-NC 4.0** | [`third_party/apEx/LICENSE.txt`](third_party/apEx/LICENSE.txt) |
 | `third_party/imgui/` | **MIT** | [`third_party/imgui/LICENSE.txt`](third_party/imgui/LICENSE.txt) |
-| `demo/cleanslate.apx`, `demo/step010padding.mvm` | **CC BY-NC 4.0** (Conspiracy's Clean Slate project and song data) | as above |
+| `demo/cleanslate.apx`, `demo/music/*.mvm` | **CC BY-NC 4.0** (Conspiracy's project and song data: the songs are the apEx release's, one per bundled project) | as above |
 | `src/player/precalc_blobs.cpp` | **CC BY-NC 4.0** | as above |
 
 `src/player/precalc_blobs.cpp` is an exception inside the Apache directory and
