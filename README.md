@@ -10,6 +10,16 @@ The target acceptance test is Conspiracy's **Clean Slate** (2023):
 ./build/neo_apex_player "/path/to/Projects/Clean Slate/cleanslate.apx"
 ```
 
+> [!IMPORTANT]
+> **This is an unofficial project.** It is not affiliated with, endorsed by, or
+> authorised by Conspiracy, who made apEx and Clean Slate. Those, the demo's
+> project data and its music are their work; this is an independent attempt to
+> run the format on other platforms, and the only thing it claims is its own
+> source code. It ships no recording of the demo or its soundtrack. If you hold
+> the rights and would rather something here were not, it is one file to remove
+> (see [Licence](#licence) for which, and [`LICENSES.md`](LICENSES.md) for the
+> full path-by-path map).
+
 ## How it works
 
 The apEx engine is a Windows/Direct3D 11 codebase (~90k lines) that speaks
