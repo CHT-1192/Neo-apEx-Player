@@ -128,7 +128,7 @@ static void Usage(const char *argv0)
           "                         ... --raw-video | ffmpeg -f rawvideo -pix_fmt rgb24 \\\n"
           "                             -s WxH -r 120 -i - -c:v libx264 out.mp4\n"
           "                       The size and rate are printed to stderr first.\n"
-          "  --yield PCT          after each frame, sleep PCT% of what that frame cost.\n"
+          "  --yield PCT          after each frame, sleep PCT%% of what that frame cost.\n"
           "                       50 halves the load (and doubles the wall time) no matter\n"
           "                       how fast the frames are\n"
           "  --render-fps N       after each frame, sleep to cap the render rate at N fps.\n"
