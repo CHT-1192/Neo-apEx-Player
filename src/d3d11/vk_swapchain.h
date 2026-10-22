@@ -43,7 +43,10 @@ public:
   // `SubmitWaitSemaphore()` / signalling `RenderFinishedSemaphore()`.
   VkResult Present();
 
-  VkSemaphore SubmitWaitSemaphore() const { return m_acquireSemaphore; }
+  VkSemaphore SubmitWaitSemaphore() const
+  {
+    return m_acquireIndex < m_acquireSemaphores.size() ? m_acquireSemaphores[m_acquireIndex] : VK_NULL_HANDLE;
+  }
   // One per swap chain image.  A single shared semaphore would have to be reused
   // while the previous frame's present might still be waiting on it, which the
   // spec forbids (and which showed up as "Semaphore must not have any pending
@@ -58,7 +61,7 @@ public:
   {
     if (!m_submitWaitsOnAcquire) return VK_NULL_HANDLE;
     m_submitWaitsOnAcquire = false;
-    return m_acquireSemaphore;
+    return SubmitWaitSemaphore();
   }
   // Consumes the "an image was acquired with a semaphore wait pending" flag.
   bool TakeSubmitWaitsOnAcquire()
@@ -104,7 +107,12 @@ private:
   std::vector<VkImageView> m_views;
   std::vector<VkImageLayout> m_layouts;
 
-  VkSemaphore m_acquireSemaphore = VK_NULL_HANDLE;
+  // One acquire semaphore per frame in flight.  With more than one frame in
+  // flight the next acquire could otherwise re-signal a semaphore that an
+  // in-flight submit is still waiting on, which the spec forbids.
+  std::vector<VkSemaphore> m_acquireSemaphores;
+  size_t m_acquireIndex = 0;      // the one the last acquire signalled
+  size_t m_nextAcquireIndex = 0;  // the one the next acquire will signal
   std::vector<VkSemaphore> m_renderFinishedSemaphores;
 
   uint32_t m_width = 0;

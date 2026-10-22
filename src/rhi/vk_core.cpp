@@ -22,6 +22,9 @@ VkBuffer g_ringBuffer = VK_NULL_HANDLE;
 VkDeviceMemory g_ringMemory = VK_NULL_HANDLE;
 uint64_t g_ringCapacity = 0;
 uint64_t g_ringOffset = 0;
+// Each frame slot owns a fixed slice of the ring, because a frame's transients
+// must stay valid while the other slot's frame is still being drawn.
+static uint64_t g_ringSlotLimit = 0;
 AcquireWaitHook g_acquireWaitHook = nullptr;
 uint8_t *g_ringMapped = nullptr;
 
@@ -426,12 +429,16 @@ void vkInitialize(bool enableValidation, const char *appName)
   VkCommandBufferAllocateInfo cbai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
   cbai.commandPool = d.framePool;
   cbai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-  cbai.commandBufferCount = 1;
-  PHXVK_CHECK(vkAllocateCommandBuffers(d.device, &cbai, &d.frameCmd));
+  cbai.commandBufferCount = Device::kFramesInFlight;
+  PHXVK_CHECK(vkAllocateCommandBuffers(d.device, &cbai, d.frameCmds));
 
   VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-  fci.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-  PHXVK_CHECK(vkCreateFence(d.device, &fci, nullptr, &d.frameFence));
+  fci.flags = VK_FENCE_CREATE_SIGNALED_BIT; // so the first waits do not hang
+  for (int i = 0; i < Device::kFramesInFlight; i++)
+    PHXVK_CHECK(vkCreateFence(d.device, &fci, nullptr, &d.frameFences[i]));
+  d.frameSlot = 0;
+  d.frameCmd = d.frameCmds[0];
+  d.frameFence = d.frameFences[0];
 
   RingInitialize(kRingDefaultSize);
 
@@ -447,22 +454,27 @@ void vkShutdown()
   // Flush the deferred-destruction lists: vkDestroyDevice would free them
   // anyway, but leaving them queued makes the validation layers report them as
   // leaked objects, and a "clean" validation run has to mean clean.
-  for (auto &p : d.deferredFree)
+  for (int slot = 0; slot < Device::kFramesInFlight; slot++)
   {
-    vkDestroyBuffer(d.device, p.first, nullptr);
-    vkFreeMemory(d.device, p.second, nullptr);
+    for (auto &p : d.deferredFree[slot])
+    {
+      vkDestroyBuffer(d.device, p.first, nullptr);
+      vkFreeMemory(d.device, p.second, nullptr);
+    }
+    d.deferredFree[slot].clear();
+    for (auto &p : d.deferredFreeImages[slot])
+    {
+      vkDestroyImage(d.device, p.first, nullptr);
+      vkFreeMemory(d.device, p.second, nullptr);
+    }
+    d.deferredFreeImages[slot].clear();
+    for (VkImageView v : d.deferredFreeViews[slot]) vkDestroyImageView(d.device, v, nullptr);
+    d.deferredFreeViews[slot].clear();
   }
-  d.deferredFree.clear();
-  for (auto &p : d.deferredFreeImages)
-  {
-    vkDestroyImage(d.device, p.first, nullptr);
-    vkFreeMemory(d.device, p.second, nullptr);
-  }
-  d.deferredFreeImages.clear();
-  for (VkImageView v : d.deferredFreeViews) vkDestroyImageView(d.device, v, nullptr);
-  d.deferredFreeViews.clear();
   RingShutdown();
-  if (d.frameFence) vkDestroyFence(d.device, d.frameFence, nullptr);
+  for (int i = 0; i < Device::kFramesInFlight; i++)
+    if (d.frameFences[i]) vkDestroyFence(d.device, d.frameFences[i], nullptr);
+  d.frameFence = VK_NULL_HANDLE;
   if (d.framePool) vkDestroyCommandPool(d.device, d.framePool, nullptr);
   vkDestroyDevice(d.device, nullptr);
   if (d.debugMessenger)
@@ -522,7 +534,7 @@ VkDeviceMemory AllocateAndBindBuffer(VkBuffer buffer, VkMemoryRequirements req, 
 
 VkCommandBuffer FrameCommandBuffer() { return g_device.frameCmd; }
 
-static void FlushDeferred(Device &d); // defined below FrameWaitIdle()
+static void FlushDeferred(Device &d, int slot); // defined below FrameWaitIdle()
 
 // What a frame costs, split the only way that matters for the single-frame-in-
 // flight design: time spent blocking on the GPU fence (the GPU was still
@@ -553,6 +565,9 @@ void FrameBegin()
 {
   Device &d = g_device;
   if (d.frameActive) return;
+  d.frameSlot = (int)(d.frameIndex % (uint64_t)Device::kFramesInFlight);
+  d.frameCmd = d.frameCmds[d.frameSlot];
+  d.frameFence = d.frameFences[d.frameSlot];
   const uint64_t beginNs = NowNs();
   vkWaitForFences(d.device, 1, &d.frameFence, VK_TRUE, UINT64_MAX);
   g_waitNs += NowNs() - beginNs;
@@ -575,7 +590,7 @@ void FrameBegin()
   //     frame 1000 -> 7.5 s      frame 3000 -> 7.5 s      frame 6000 -> 335 s
   // i.e. 28 seconds per frame once the leak had the machine swapping, which is
   // also what made the beachball appear and the whole desktop stall.
-  FlushDeferred(d);
+  FlushDeferred(d, d.frameSlot);
 
   vkResetCommandBuffer(d.frameCmd, 0);
 
@@ -583,7 +598,7 @@ void FrameBegin()
   bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
   vkBeginCommandBuffer(d.frameCmd, &bi);
   d.frameActive = true;
-  g_ringOffset = 0;
+  RingBeginFrame(d.frameSlot);
 }
 
 void FrameEndAndSubmit()
@@ -615,30 +630,31 @@ void FrameEndAndSubmit()
 
 // Destroys everything the engine released earlier.  Only call once the GPU is
 // known to be finished with them.
-static void FlushDeferred(Device &d)
+static void FlushDeferred(Device &d, int slot)
 {
-  for (auto &p : d.deferredFree)
+  for (auto &p : d.deferredFree[slot])
   {
     vkDestroyBuffer(d.device, p.first, nullptr);
     vkFreeMemory(d.device, p.second, nullptr);
   }
-  d.deferredFree.clear();
-  for (auto &p : d.deferredFreeImages)
+  d.deferredFree[slot].clear();
+  for (auto &p : d.deferredFreeImages[slot])
   {
     vkDestroyImage(d.device, p.first, nullptr);
     if (p.second != VK_NULL_HANDLE) vkFreeMemory(d.device, p.second, nullptr);
   }
-  d.deferredFreeImages.clear();
-  for (VkImageView v : d.deferredFreeViews)
+  d.deferredFreeImages[slot].clear();
+  for (VkImageView v : d.deferredFreeViews[slot])
     vkDestroyImageView(d.device, v, nullptr);
-  d.deferredFreeViews.clear();
+  d.deferredFreeViews[slot].clear();
 }
 
 void FrameWaitIdle()
 {
   Device &d = g_device;
   vkDeviceWaitIdle(d.device);
-  FlushDeferred(d);
+  // Idle: every slot's work has completed, so every list is safe to flush.
+  for (int slot = 0; slot < Device::kFramesInFlight; slot++) FlushDeferred(d, slot);
 }
 
 // Not inside the anonymous namespace above: this is part of the API the
@@ -647,19 +663,19 @@ void vkSetAcquireWaitHook(AcquireWaitHook hook) { g_acquireWaitHook = hook; }
 
 void DeferFree(VkBuffer buffer, VkDeviceMemory memory)
 {
-  Vk().deferredFree.emplace_back(buffer, memory);
+  Vk().deferredFree[Vk().frameSlot].emplace_back(buffer, memory);
 }
 
 void DeferFreeImage(VkImage image, VkDeviceMemory memory)
 {
   if (image == VK_NULL_HANDLE) return;
-  Vk().deferredFreeImages.emplace_back(image, memory);
+  Vk().deferredFreeImages[Vk().frameSlot].emplace_back(image, memory);
 }
 
 void DeferFreeImageView(VkImageView view)
 {
   if (view == VK_NULL_HANDLE) return;
-  Vk().deferredFreeViews.push_back(view);
+  Vk().deferredFreeViews[Vk().frameSlot].push_back(view);
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -680,7 +696,9 @@ void RingInitialize(uint64_t bytes)
   g_ringMemory = AllocateAndBindBuffer(g_ringBuffer, req, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
   PHXVK_CHECK(vkMapMemory(d.device, g_ringMemory, 0, VK_WHOLE_SIZE, 0, (void **)&g_ringMapped));
   g_ringOffset = 0;
-  LogInfo("dynamic ring: %.1f MB", g_ringCapacity / 1048576.0);
+  g_ringSlotLimit = g_ringCapacity;
+  LogInfo("dynamic ring: %.1f MB, %.1f MB per frame slot", g_ringCapacity / 1048576.0,
+          g_ringCapacity / 1048576.0 / (double)Device::kFramesInFlight);
 }
 
 void RingShutdown()
@@ -697,17 +715,24 @@ void RingShutdown()
   g_ringMemory = VK_NULL_HANDLE;
 }
 
+void RingBeginFrame(int slot)
+{
+  const uint64_t slice = g_ringCapacity / (uint64_t)Device::kFramesInFlight;
+  g_ringOffset = slice * (uint64_t)slot;
+  g_ringSlotLimit = g_ringOffset + slice;
+}
+
 RingAlloc RingAllocate(uint64_t size, uint64_t alignment)
 {
   RingAlloc a;
   if (!g_ringBuffer || size == 0) return a;
   uint64_t aligned = (g_ringOffset + alignment - 1) & ~(alignment - 1);
-  if (aligned + size > g_ringCapacity)
+  if (aligned + size > g_ringSlotLimit)
   {
     // The ring is exhausted for this frame.  Growing it transparently would
     // invalidate every recorded binding, so fail loudly instead of corrupting.
-    LogError("dynamic ring exhausted (%llu + %llu > %llu); increase the ring size",
-             (unsigned long long)aligned, (unsigned long long)size, (unsigned long long)g_ringCapacity);
+    LogError("dynamic ring exhausted in this frame's slice (%llu + %llu > %llu); increase the ring size",
+             (unsigned long long)aligned, (unsigned long long)size, (unsigned long long)g_ringSlotLimit);
     abort();
   }
   a.buffer = g_ringBuffer;

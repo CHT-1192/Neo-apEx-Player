@@ -260,9 +260,12 @@ void ContextImpl::DestroyVulkanObjects()
   for (auto &p : setLayouts)
     if (p.second) vkDestroyDescriptorSetLayout(d.device, p.second, nullptr);
   setLayouts.clear();
-  for (auto &pool : descriptorPools)
-    if (pool) vkDestroyDescriptorPool(d.device, pool, nullptr);
-  descriptorPools.clear();
+  for (int slot = 0; slot < phxvk::Device::kFramesInFlight; slot++)
+  {
+    for (auto &pool : descriptorPools[slot])
+      if (pool) vkDestroyDescriptorPool(d.device, pool, nullptr);
+    descriptorPools[slot].clear();
+  }
   if (dummySampler) vkDestroySampler(d.device, dummySampler, nullptr);
   if (dummyImageView) vkDestroyImageView(d.device, dummyImageView, nullptr);
   if (dummyImage) vkDestroyImage(d.device, dummyImage, nullptr);
@@ -285,9 +288,10 @@ void ContextImpl::ResetDescriptorPools()
 {
   phxvk::Device &d = phxvk::Vk();
   if (!d.device) return;
-  // FrameBegin() waited on the previous frame's fence, so no descriptor set
-  // from an earlier frame is still in use.
-  for (auto &pool : descriptorPools)
+  // FrameBegin() waited on THIS slot's fence, so no descriptor set recorded in
+  // this slot's earlier frame is still in use.  Other slots' pools are untouched
+  // for exactly the opposite reason.
+  for (auto &pool : descriptorPools[d.frameSlot])
     if (pool) vkResetDescriptorPool(d.device, pool, 0);
 }
 
@@ -567,7 +571,7 @@ bool ContextImpl::ApplyGraphicsState(VkCommandBuffer cmd)
 VkDescriptorSet ContextImpl::AllocateDescriptorSet(VkDescriptorSetLayout layout)
 {
   phxvk::Device &d = phxvk::Vk();
-  if (descriptorPools.empty())
+  if (descriptorPools[d.frameSlot].empty())
   {
     VkDescriptorPoolSize sizes[] = {
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 4096}, {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 8192},     {VK_DESCRIPTOR_TYPE_SAMPLER, 2048},
@@ -585,11 +589,11 @@ VkDescriptorSet ContextImpl::AllocateDescriptorSet(VkDescriptorSetLayout layout)
       phxvk::LogError("vkCreateDescriptorPool failed: %s", phxvk::VkResultName(r));
       return VK_NULL_HANDLE;
     }
-    descriptorPools.push_back(pool);
+    descriptorPools[d.frameSlot].push_back(pool);
   }
 
   VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-  ai.descriptorPool = descriptorPools.back();
+  ai.descriptorPool = descriptorPools[d.frameSlot].back();
   ai.descriptorSetCount = 1;
   ai.pSetLayouts = &layout;
   VkDescriptorSet set = VK_NULL_HANDLE;
@@ -608,7 +612,7 @@ VkDescriptorSet ContextImpl::AllocateDescriptorSet(VkDescriptorSetLayout layout)
     pci.pPoolSizes = sizes;
     VkDescriptorPool pool = VK_NULL_HANDLE;
     if (vkCreateDescriptorPool(d.device, &pci, nullptr, &pool) != VK_SUCCESS) return VK_NULL_HANDLE;
-    descriptorPools.push_back(pool);
+    descriptorPools[d.frameSlot].push_back(pool);
     ai.descriptorPool = pool;
     if (vkAllocateDescriptorSets(d.device, &ai, &set) != VK_SUCCESS)
     {

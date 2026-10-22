@@ -748,7 +748,10 @@ struct ContextImpl : public ID3D11DeviceContext, public ObjectBase
   std::map<std::vector<uint32_t>, VkDescriptorSetLayout> setLayouts;
   std::map<VkDescriptorSetLayout, VkPipelineLayout> pipelineLayouts;
   std::map<PipelineKey, VkPipeline> pipelines;
-  std::vector<VkDescriptorPool> descriptorPools;
+  // One set of pools per frame slot: a set allocated while frame N is in flight
+  // must not be freed by the reset that begins frame N+1, which is what a single
+  // flat vector did once more than one frame could be in flight.
+  std::vector<VkDescriptorPool> descriptorPools[phxvk::Device::kFramesInFlight];
   VkDescriptorSetLayout lastSetLayout = VK_NULL_HANDLE;
   int frameParity = 0;
   uint64_t lastFrameIndex = ~0ull;

@@ -43,15 +43,27 @@ struct Device
   VkCommandBuffer frameCmd = VK_NULL_HANDLE;
   bool frameActive = false;
   VkFence frameFence = VK_NULL_HANDLE;
+  // Two frames in flight, so the CPU records frame N+1 while the GPU still draws
+  // frame N.  Measured before this change: 17.99 ms per frame, 10.82 ms of it
+  // blocked on the GPU fence and 7.17 ms CPU -- serialised, so overlap is worth
+  // about 1.6x.  frameCmd/frameFence stay the CURRENT slot's handles so that
+  // every existing caller keeps working; the arrays are the per-slot storage.
+  static const int kFramesInFlight = 2;
+  int frameSlot = 0;
+  VkCommandBuffer frameCmds[kFramesInFlight] = {};
+  VkFence frameFences[kFramesInFlight] = {};
   uint64_t lastFrameStartNs = 0; // [port] for the frame-cost breakdown
   uint64_t frameIndex = 0;
 
   // A single staging buffer queued for destruction once the frame completes.
-  std::vector<std::pair<VkBuffer, VkDeviceMemory>> deferredFree;
+  // One list per slot.  A slot's list is flushed when that slot's fence has just
+  // been waited on: with two frames in flight that means frame F-2 has completed,
+  // and list[F%2] holds exactly what frame F-2 released.
+  std::vector<std::pair<VkBuffer, VkDeviceMemory>> deferredFree[kFramesInFlight];
   // Images that were released while a frame command buffer might still
   // reference them (the engine churns texgen textures during generation).
-  std::vector<std::pair<VkImage, VkDeviceMemory>> deferredFreeImages;
-  std::vector<VkImageView> deferredFreeViews;
+  std::vector<std::pair<VkImage, VkDeviceMemory>> deferredFreeImages[kFramesInFlight];
+  std::vector<VkImageView> deferredFreeViews[kFramesInFlight];
 };
 
 // Global accessor; initialized by vkInitialize().
@@ -149,6 +161,10 @@ void RingInitialize(uint64_t bytes);
 void RingShutdown();
 RingAlloc RingAllocate(uint64_t size, uint64_t alignment = 256);
 uint64_t RingUsed();
+
+// Starts a frame's slice of the ring.  With more than one frame in flight a
+// frame's transients must stay valid while the other frame is still drawn.
+void RingBeginFrame(int slot);
 uint64_t RingCapacity();
 
 // ---------------------------------------------------------------------------

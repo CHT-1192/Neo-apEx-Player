@@ -65,8 +65,13 @@ bool Swapchain::Create(HWND outputWindow, const DXGI_SWAP_CHAIN_DESC &desc, uint
   if (!CreateSurface(outputWindow)) return false;
 
   VkSemaphoreCreateInfo sci{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
-  if (m_acquireSemaphore == VK_NULL_HANDLE)
-    PHXVK_CHECK(vkCreateSemaphore(phxvk::Vk().device, &sci, nullptr, &m_acquireSemaphore));
+  if (m_acquireSemaphores.empty())
+  {
+    m_acquireSemaphores.resize((size_t)phxvk::Device::kFramesInFlight, VK_NULL_HANDLE);
+    for (VkSemaphore &sem : m_acquireSemaphores)
+      PHXVK_CHECK(vkCreateSemaphore(phxvk::Vk().device, &sci, nullptr, &sem));
+    m_acquireIndex = m_nextAcquireIndex = 0;
+  }
   if (!CreateSwapchain(width, height, desc.BufferDesc.Format)) return false;
 
   // One render-finished semaphore per image, created once the image count is
@@ -311,11 +316,10 @@ void Swapchain::Destroy()
   }
   vkDeviceWaitIdle(d.device);
   DestroySwapchainObjects();
-  if (m_acquireSemaphore)
-  {
-    vkDestroySemaphore(d.device, m_acquireSemaphore, nullptr);
-    m_acquireSemaphore = VK_NULL_HANDLE;
-  }
+  for (VkSemaphore &sem : m_acquireSemaphores)
+    if (sem) vkDestroySemaphore(d.device, sem, nullptr);
+  m_acquireSemaphores.clear();
+  m_acquireIndex = m_nextAcquireIndex = 0;
   for (VkSemaphore &sem : m_renderFinishedSemaphores)
     if (sem != VK_NULL_HANDLE) vkDestroySemaphore(d.device, sem, nullptr);
   m_renderFinishedSemaphores.clear();
@@ -342,7 +346,9 @@ bool Swapchain::AcquireNextImage()
   if (m_swapchain == VK_NULL_HANDLE) return false;
   phxvk::Device &d = phxvk::Vk();
   uint32_t index = 0;
-  VkResult res = vkAcquireNextImageKHR(d.device, m_swapchain, UINT64_MAX, m_acquireSemaphore, VK_NULL_HANDLE, &index);
+  const size_t acquireSlot = m_acquireSemaphores.empty() ? 0 : m_nextAcquireIndex % m_acquireSemaphores.size();
+  VkSemaphore acquireSem = m_acquireSemaphores.empty() ? VK_NULL_HANDLE : m_acquireSemaphores[acquireSlot];
+  VkResult res = vkAcquireNextImageKHR(d.device, m_swapchain, UINT64_MAX, acquireSem, VK_NULL_HANDLE, &index);
 
   // VK_SUBOPTIMAL_KHR still hands back a usable image AND leaves the semaphore
   // signalled, so it must be accepted, not retried: acquiring again with the
@@ -356,13 +362,21 @@ bool Swapchain::AcquireNextImage()
   {
     phxvk::LogWarn("swap chain out of date on acquire; recreating");
     if (!CreateSwapchain(m_width, m_height, m_desc.BufferDesc.Format)) return false;
-    res = vkAcquireNextImageKHR(d.device, m_swapchain, UINT64_MAX, m_acquireSemaphore, VK_NULL_HANDLE, &index);
+    res = vkAcquireNextImageKHR(d.device, m_swapchain, UINT64_MAX, acquireSem, VK_NULL_HANDLE, &index);
   }
 
   if (res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR)
   {
     phxvk::LogError("vkAcquireNextImageKHR failed: %s", phxvk::VkResultName(res));
     return false;
+  }
+  // This acquire's semaphore is the one this frame's submission waits on; the
+  // next acquire rotates to the following one so it can never be re-signalled
+  // while a submit from an earlier frame is still waiting on it.
+  if (!m_acquireSemaphores.empty())
+  {
+    m_acquireIndex = acquireSlot;
+    m_nextAcquireIndex = (acquireSlot + 1) % m_acquireSemaphores.size();
   }
   m_current = index;
   m_submitWaitsOnAcquire = true;
