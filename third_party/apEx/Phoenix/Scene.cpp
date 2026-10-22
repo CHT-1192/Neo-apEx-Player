@@ -643,7 +643,7 @@ void CphxObject_ParticleEmitter_CPU::CreateRenderDataInstances( int Clip, const 
     calls++;
     // first few, and then every 500th call so a short run shows the counter move
     if ( reported < 8 ? ( Particles[ 0 ].LifeLeft > 0 || SplineResults[ Spline_Particle_EmissionPerSecond ] > 0 )
-                      : ( calls % 2000 ) == 0 )
+                      : ( calls % 200 ) == 0 )
     {
       reported++;
       const int slots = 1 << BufferSize;

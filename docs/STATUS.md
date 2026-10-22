@@ -273,6 +273,31 @@ Two dead ends worth recording so nobody repeats them:
 frame with the update/timeline/generator/dump/present split, and the default
 (250) keeps the log quiet.
 
+## Particles do spawn now; 3:00 is a phase question, not a rendering one
+
+After the three particle fixes, a full low-resolution playthrough reports
+**peak 1000 live particles** (of 1024 slots, so the emitter is nearly saturated)
+and `spawns` climbing into the hundreds.  The system works.
+
+Frame 21600 still renders without the cloud, and the reason is now specific
+rather than mysterious.  A sub-scene loops on
+`fabs(fmod(SplineResults[Spline_SubScene_Time] + offset, 1.0))`, and at that
+frame the port's phase is **0.964** -- just short of the wrap.  The emission
+spline is nearly zero there, so nothing new is born, and whatever was alive has
+aged out.
+
+The reference has a cloud at that instant, which means its phase is somewhere the
+emission is high.  A 1-second loop phase is sensitive to exactly the kind of
+error the port is already known to have: it runs about **0.25 s early** on scene
+changes (recorded under the open 55 s item).  0.25 s is a quarter of that loop,
+which is the right order of magnitude to move 0.964 to a live phase.
+
+So the remaining 3:00 difference is very likely the timing offset, not the
+particle path -- which is why it is being tracked as part of that item rather
+than patched here.  Verifying it means another full playthrough (twenty minutes
+of the machine) or reading the sub-scene time spline analytically; the second is
+cheaper and is what to try next.
+
 ## Particles were never simulated at all
 
 `grep SimulateParticles()` over the vendored tree returns exactly one hit: the
