@@ -105,6 +105,16 @@ Known limits, all logged at runtime:
 * Text comes from **CoreText** outlines instead of Windows GDI, so substituted
   faces are logged and Arial Black comes out slightly smaller.
 
+**What this is not: a 64k.** Clean Slate is a 64k intro — the engine, the
+models, the textures, the shaders and the music all fit in under 65,536 bytes.
+This project plays the *unpacked* project instead: `demo/cleanslate.apx` is
+12.8 MB, the song data another 1 MB, and the player a 2.7 MB executable built
+from 113,812 lines of the engine's source. It reproduces the picture and the
+timeline, **not the size achievement**, and it does not contain the packer or any
+of the size-constrained tricks the original needed — the 20 bytes of headroom,
+the sacrificed window title, the precalc bars. That is roughly 200x the budget
+before the engine is even counted.
+
 macOS is the target platform and the only one tested. Windows would work with
 `compat/` disabled; Linux needs a case-sensitivity shim and a decision about the
 GDI subset. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) explains how the port
