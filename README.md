@@ -105,15 +105,18 @@ Known limits, all logged at runtime:
 * Text comes from **CoreText** outlines instead of Windows GDI, so substituted
   faces are logged and Arial Black comes out slightly smaller.
 
-**What this is not: a 64k.** Clean Slate is a 64k intro — the engine, the
-models, the textures, the shaders and the music all fit in under 65,536 bytes.
-This project plays the *unpacked* project instead: `demo/cleanslate.apx` is
-12.8 MB, the song data another 1 MB, and the player a 2.7 MB executable built
-from 113,812 lines of the engine's source. It reproduces the picture and the
-timeline, **not the size achievement**, and it does not contain the packer or any
-of the size-constrained tricks the original needed — the 20 bytes of headroom,
-the sacrificed window title, the precalc bars. That is roughly 200x the budget
-before the engine is even counted.
+**What this is not: a 64k.** Clean Slate is a 64k intro, and its *released
+executable* packs engine, models, textures, shaders and music into under 65,536
+bytes. This project runs the same work in the form its authors published it —
+apEx is an open-source release, so the engine and the project data are available
+as they are, and **nothing here unpacks anything**. `demo/cleanslate.apx` is
+13.4 MB in that authoring form, the song data 1.0 MB, and the player **2.8 MB**
+built from 113,812 lines of engine source.
+
+What is reproduced is the picture and the timeline, **not the size achievement**.
+The packer, the cruncher and the tricks that fit under the budget — 20 bytes of
+headroom, the sacrificed window title — belong to the original Windows
+toolchain, which this project neither produces nor consumes.
 
 macOS is the target platform and the only one tested. Windows would work with
 `compat/` disabled; Linux needs a case-sensitivity shim and a decision about the

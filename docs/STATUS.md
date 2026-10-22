@@ -10,14 +10,16 @@ A cross-platform Vulkan player for the apEx demotool (Conspiracy, used since
 Supermode in 2014; the acceptance title is Clean Slate, Revision 2021),
 validated by loading and rendering `Projects/Clean Slate/cleanslate.apx`.
 
-**Scope, stated plainly:** Clean Slate is a **64k intro** -- engine, content and
-music in under 65,536 bytes.  This project does not reproduce that.  It plays the
-**unpacked** project: `demo/cleanslate.apx` is 12.8 MB, the song data 1 MB, and
-the player a 2.7 MB executable built from 113,812 lines of engine source --
-roughly 200x the original's entire budget before the engine is counted.  The
-packer, the cruncher and the size-constrained shortcuts are outside this project
-entirely.  What is being validated here is the picture and the timeline on other
-platforms, and every "verified" claim below is about that, not about size.
+**Scope, stated plainly:** Clean Slate is a **64k intro** -- its released
+executable holds engine, content and music in under 65,536 bytes.  This project
+does not reproduce that and does not claim to.  apEx is an open-source release,
+so what runs here is the work in the form its authors published it: the engine
+sources (113,812 lines) built into a **2.8 MB** player, playing
+`demo/cleanslate.apx` at 13.4 MB with 1.0 MB of song data.  Nothing is unpacked
+-- the packed executable is a separate build product of the original Windows
+toolchain, which this project neither produces nor consumes.  What is validated
+here is the picture and the timeline on other platforms, and every "verified"
+claim below is about that, not about size.
 
 ## Architecture (decided, do not relitigate)
 
