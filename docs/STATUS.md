@@ -273,6 +273,27 @@ Two dead ends worth recording so nobody repeats them:
 frame with the update/timeline/generator/dump/present split, and the default
 (250) keeps the log quiet.
 
+## Particles render. The 3:00 cloud is about which emitter is live, not the engine
+
+With the frame number and the particle life added to the diagnostic, a run over
+the first particle event says:
+
+    frame 16074: alive 571, emit/s 64.00, life 4.00, spawns 14277
+    frame 16141: alive 281, emit/s 25.00, life 40.00, spawns 14434
+    peak alive 584
+
+and frame 16100, rendered and put beside the same frame of the reference, shows
+the same clock, the same shadow, and **the same dust motes** in both.  The
+particle path is correct end to end: they are born, they age, they are drawn.
+
+So the 3:00 difference is not the particle engine.  At frame 21600 the port's
+emitter is at the end of its life -- the emission spline has decayed to zero
+there -- and the reference still has a cloud.  The question left is which
+emitter or sub-scene should be live at that instant, which is a timelines
+question, not a simulation one.  Earlier theories that the emitted mesh is not
+drawn, that the life spline reads zero, or that the sub-scene phase is a fast
+one-second loop are all dead, each with a measurement.
+
 ## Particles do spawn now; 3:00 is a phase question, not a rendering one
 
 After the three particle fixes, a full low-resolution playthrough reports

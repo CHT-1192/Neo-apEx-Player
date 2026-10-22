@@ -393,6 +393,7 @@ void CphxObject_SubScene::CreateRenderDataInstances( int Clip, const D3DXMATRIX 
 // [port] Cumulative count of particles born since start, so a run can tell
 // "never spawns" from "spawns but is not drawn".
 static long long g_particleSpawns = 0;
+extern int CurrentFrame; // [port] set per render by CphxTimeline::Render
 
 void CphxObject_ParticleEmitter_CPU::SpawnParticle( float t, D3DXMATRIX &m, D3DXMATRIX &o, float mt )
 {
@@ -650,9 +651,10 @@ void CphxObject_ParticleEmitter_CPU::CreateRenderDataInstances( int Clip, const 
       int alive = 0;
       for ( int y = 0; y < slots; y++ )
         if ( Particles[ y ].LifeLeft > 0 ) alive++;
-      printf( "[particles] buffersize %d = %d slots, %d alive, LiveCount %d, Ticks %.3f, emit-scene %d, emit-mesh %d, emit/s %.4f, aging %d, spawns %lld\n",
-              (int)BufferSize, slots, alive, (int)LiveCount, Ticks, SceneToEmit ? 1 : 0, ObjectToEmit ? 1 : 0,
-              SplineResults[ Spline_Particle_EmissionPerSecond ], Aging ? 1 : 0, g_particleSpawns );
+      printf( "[particles] frame %d buffersize %d = %d slots, %d alive, LiveCount %d, Ticks %.3f, emit-scene %d, emit-mesh %d, emit/s %.4f, life %.3f, lifechaos %.3f, aging %d, spawns %lld\n",
+              CurrentFrame, (int)BufferSize, slots, alive, (int)LiveCount, Ticks, SceneToEmit ? 1 : 0, ObjectToEmit ? 1 : 0,
+              SplineResults[ Spline_Particle_EmissionPerSecond ], SplineResults[ Spline_Particle_Life ],
+              SplineResults[ Spline_Particle_LifeChaos ], Aging ? 1 : 0, g_particleSpawns );
       fflush( stdout );
     }
   }
