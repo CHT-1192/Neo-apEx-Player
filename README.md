@@ -334,7 +334,11 @@ licence notices are in its own headers and must be kept.
 
 ## Licence
 
-Two kinds of content, two sets of terms.
+Two kinds of content, two sets of terms; [`LICENSES.md`](LICENSES.md) is the
+path-by-path table, and it is the file to read first if you only read one --
+this repository is **not** a single-licence work, and the Apache 2.0 `LICENSE`
+at the root covers the port's own code, not the engine and demo vendored beside
+it.
 
 **This project's own code** -- `src/`, `tools/`, `tests/`, `docs/`, the build
 files and `.github/` -- is a separate Vulkan/D3D11-shim player that happens to
