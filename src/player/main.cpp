@@ -82,6 +82,8 @@ struct Options
   int slowFrameMs = 250;     // --slow-frame-ms; report frames slower than this (0 = all)
   int renderFps = 0;         // --render-fps; cap how fast an offline run renders (0 = unlimited)
   int yieldPct = 0;          // --yield; sleep this percentage of each frame's cost (0 = never)
+  bool rawVideo = false;     // --raw-video; write each frame to stdout as RGB24
+  bool rawVideoHeaderDone = false;
   bool preheat = false;      // --preheat; off by default, see the measured trade-off in STATUS.md
   // The release player puts its setup dialog in front of everything else
   // (apEx/MinimalPlayer/MinimalPlayer.cpp:147, `if ( OpenSetupDialog( Strings ) )`,
@@ -120,6 +122,12 @@ static void Usage(const char *argv0)
           "  --preheat            initialise every event before playback.  Halves each\n"
           "                       event's first-frame stall (1412 -> 805 ms on Clean\n"
           "                       Slate) but costs 1.6 s of loading, so it is opt-in\n"
+          "  --raw-video          write every finished frame to stdout as raw RGB24 and\n"
+          "                       keep stdout free of anything else, so the picture can\n"
+          "                       be piped straight into an encoder:\n"
+          "                         ... --raw-video | ffmpeg -f rawvideo -pix_fmt rgb24 \\\n"
+          "                             -s WxH -r 120 -i - -c:v libx264 out.mp4\n"
+          "                       The size and rate are printed to stderr first.\n"
           "  --yield PCT          after each frame, sleep PCT% of what that frame cost.\n"
           "                       50 halves the load (and doubles the wall time) no matter\n"
           "                       how fast the frames are\n"
@@ -170,6 +178,7 @@ static bool ParseArgs(int argc, char **argv, Options &o)
     else if (a == "--slow-frame-ms") o.slowFrameMs = atoi(next("--slow-frame-ms"));
     else if (a == "--render-fps") o.renderFps = atoi(next("--render-fps"));
     else if (a == "--yield") o.yieldPct = atoi(next("--yield"));
+    else if (a == "--raw-video") o.rawVideo = true;
     else if (a == "--preheat") o.preheat = true;
     else if (a == "--no-preheat") o.preheat = false;
     else if (a == "--ui") o.enableUi = true;
@@ -910,6 +919,12 @@ int main(int argc, char **argv)
     phxvk::LogWarn("the project declares no <songfile>; running on the wall clock only");
   }
 
+  // An explicit size means the picture must not follow the window: a hidden
+  // window still gets resized by the window server, and that would change the
+  // frame size in the middle of a raw video pipe.
+  extern bool phxLockRenderSize;
+  if (opt.width > 0 && opt.height > 0) phxLockRenderSize = true;
+
   phxplayer::SongClock clock;
   clock.Configure(song, fps);
 
@@ -1433,6 +1448,42 @@ int main(int argc, char **argv)
 
     if (opt.fixedFps) clock.AdvanceFixedStep();
     else clock.Update();
+
+    if (opt.rawVideo)
+    {
+      std::vector<uint8_t> pixels;
+      UINT width = 0, height = 0;
+      std::string err;
+      if (!phxplayer::ReadBackBufferRGB(pixels, &width, &height, &err))
+      {
+        phxvk::LogError("--raw-video: %s", err.c_str());
+        break;
+      }
+      if (!opt.rawVideoHeaderDone)
+      {
+        // stderr, so the pipe stays pure pixels.
+        fprintf(stderr, "#rawvideo rgb24 %ux%u fps %.6f frames %lld\n", width, height,
+                (double)Project.Timeline->Timeline->FrameRate, (long long)opt.frames);
+        fflush(stderr);
+        opt.rawVideoHeaderDone = true;
+      }
+      static UINT firstW = 0, firstH = 0;
+      if (!firstW) { firstW = width; firstH = height; }
+      else if (width != firstW || height != firstH)
+      {
+        // The pipe has one contract; a mid-stream size change would silently
+        // corrupt every frame after it, so stop instead.
+        phxvk::LogError("--raw-video: frame size changed from %ux%u to %ux%u at frame %lld; stopping",
+                        firstW, firstH, width, height, (long long)rendered);
+        break;
+      }
+      if (fwrite(pixels.data(), 1, pixels.size(), stdout) != pixels.size())
+      {
+        phxvk::LogError("--raw-video: short write to stdout");
+        break;
+      }
+      fflush(stdout);
+    }
 
     rendered++;
     if (rendered % 300 == 0) phxvk::PrintFrameStats();

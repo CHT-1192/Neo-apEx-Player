@@ -102,11 +102,12 @@ Rgba DecodePixel(const unsigned char *p, DXGI_FORMAT fmt)
 
 } // namespace
 
-bool DumpTextureToPPM(ID3D11Texture2D *srcTexture, const char *path, std::string *error)
+bool ReadTextureRGB24(ID3D11Texture2D *srcTexture, std::vector<uint8_t> &out, UINT *width, UINT *height,
+                      std::string *error)
 {
   auto fail = [&](const char *what) {
     if (error) *error = what;
-    phxvk::LogError("frame dump: %s", what);
+    phxvk::LogError("frame readback: %s", what);
     return false;
   };
 
@@ -145,42 +146,72 @@ bool DumpTextureToPPM(ID3D11Texture2D *srcTexture, const char *path, std::string
     return fail("Map(staging) failed");
   }
 
-  FILE *f = fopen(path, "wb");
-  if (!f)
-  {
-    phxContext->Unmap(staging, 0);
-    staging->Release();
-    back->Release();
-    return fail("could not open the output file");
-  }
-
   const size_t bytesPerPixel =
       (desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT) ? 8 :
       (desc.Format == DXGI_FORMAT_R16G16_FLOAT) ? 4 :
       (desc.Format == DXGI_FORMAT_R16_UNORM || desc.Format == DXGI_FORMAT_R16_FLOAT) ? 2 : 4;
 
-  fprintf(f, "P6\n%u %u\n255\n", desc.Width, desc.Height);
-  std::vector<unsigned char> row((size_t)desc.Width * 3);
+  out.resize((size_t)desc.Width * desc.Height * 3);
   for (UINT y = 0; y < desc.Height; y++)
   {
     const unsigned char *src = (const unsigned char *)mapped.pData + (size_t)y * mapped.RowPitch;
+    unsigned char *dst = out.data() + (size_t)y * desc.Width * 3;
     for (UINT x = 0; x < desc.Width; x++)
     {
       Rgba c = DecodePixel(src + (size_t)x * bytesPerPixel, desc.Format);
-      row[x * 3 + 0] = (unsigned char)c.r;
-      row[x * 3 + 1] = (unsigned char)c.g;
-      row[x * 3 + 2] = (unsigned char)c.b;
+      dst[x * 3 + 0] = (unsigned char)c.r;
+      dst[x * 3 + 1] = (unsigned char)c.g;
+      dst[x * 3 + 2] = (unsigned char)c.b;
     }
-    fwrite(row.data(), 1, row.size(), f);
   }
-  fclose(f);
 
   phxContext->Unmap(staging, 0);
   staging->Release();
   back->Release();
 
-  phxvk::LogInfo("frame dump: wrote %s (%ux%u, DXGI format %d)", path, desc.Width, desc.Height, (int)desc.Format);
+  if (width) *width = desc.Width;
+  if (height) *height = desc.Height;
   return true;
+}
+
+bool DumpTextureToPPM(ID3D11Texture2D *srcTexture, const char *path, std::string *error)
+{
+  std::vector<uint8_t> pixels;
+  UINT width = 0, height = 0;
+  if (!ReadTextureRGB24(srcTexture, pixels, &width, &height, error)) return false;
+
+  FILE *f = fopen(path, "wb");
+  if (!f)
+  {
+    if (error) *error = "could not open the output file";
+    phxvk::LogError("frame dump: could not open %s", path);
+    return false;
+  }
+  fprintf(f, "P6\n%u %u\n255\n", width, height);
+  fwrite(pixels.data(), 1, pixels.size(), f);
+  fclose(f);
+  phxvk::LogInfo("frame dump: wrote %s (%ux%u)", path, width, height);
+  return true;
+}
+
+bool ReadBackBufferRGB(std::vector<uint8_t> &out, UINT *width, UINT *height, std::string *error)
+{
+  if (!SwapChain)
+  {
+    if (error) *error = "no swap chain";
+    phxvk::LogError("frame readback: no swap chain");
+    return false;
+  }
+  ID3D11Texture2D *back = nullptr;
+  if (FAILED(SwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), (void **)&back)) || !back)
+  {
+    if (error) *error = "SwapChain::GetBuffer(0) failed";
+    phxvk::LogError("frame readback: SwapChain::GetBuffer(0) failed");
+    return false;
+  }
+  bool ok = ReadTextureRGB24(back, out, width, height, error);
+  back->Release();
+  return ok;
 }
 
 bool DumpBackBufferToPPM(const char *path, std::string *error)

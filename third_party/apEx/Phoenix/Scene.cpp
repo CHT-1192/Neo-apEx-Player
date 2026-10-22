@@ -315,9 +315,9 @@ void CphxObject::CalculateAnimation( int Clip, float t )
       static int n40 = 0;
       if ( n40++ < 8 )
       {
-        printf( "[spline40] t=%.3f keys=%d value0=%.4f loopt=%d\n", t, (int)s->Spline->KeyCount,
+        fprintf( stderr, "[spline40] t=%.3f keys=%d value0=%.4f loopt=%d\n", t, (int)s->Spline->KeyCount,
                 s->Spline->Value[ 0 ], (int)s->Spline->Loop );
-        fflush( stdout );
+        fflush( stderr );
       }
     }
     if ( s->Type == Spline_Rotation ) RotationResult = s->Spline->GetQuaternion();
@@ -651,11 +651,11 @@ void CphxObject_ParticleEmitter_CPU::CreateRenderDataInstances( int Clip, const 
       int alive = 0;
       for ( int y = 0; y < slots; y++ )
         if ( Particles[ y ].LifeLeft > 0 ) alive++;
-      printf( "[particles] frame %d buffersize %d = %d slots, %d alive, LiveCount %d, Ticks %.3f, emit-scene %d, emit-mesh %d, emit/s %.4f, life %.3f, lifechaos %.3f, aging %d, spawns %lld\n",
+      fprintf( stderr, "[particles] frame %d buffersize %d = %d slots, %d alive, LiveCount %d, Ticks %.3f, emit-scene %d, emit-mesh %d, emit/s %.4f, life %.3f, lifechaos %.3f, aging %d, spawns %lld\n",
               CurrentFrame, (int)BufferSize, slots, alive, (int)LiveCount, Ticks, SceneToEmit ? 1 : 0, ObjectToEmit ? 1 : 0,
               SplineResults[ Spline_Particle_EmissionPerSecond ], SplineResults[ Spline_Particle_Life ],
               SplineResults[ Spline_Particle_LifeChaos ], Aging ? 1 : 0, g_particleSpawns );
-      fflush( stdout );
+      fflush( stderr );
     }
   }
 

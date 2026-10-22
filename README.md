@@ -215,6 +215,37 @@ ffmpeg -i "Clean Slate [O3T1-nadehU].webm" -vn -ac 2 -ar 48000 -c:a pcm_s16le mu
 A frame-by-frame comparison against that video is what `apexcompare` in
 [`.dshrc`](.dshrc) does: `source ./.dshrc && apexcompare 2999`.
 
+### Recording it
+
+`--raw-video` writes every finished frame to **stdout** as raw RGB24 and puts
+nothing else there, so the picture can be piped straight into an encoder.  No
+screen capture, no window, no display scaling: the frames are the frames the
+renderer produced.
+
+```sh
+./build/neo_apex_player demo/cleanslate.apx --headless --no-ui \
+  --raw-video --width 1920 --height 1080 \
+  | ffmpeg -f rawvideo -pix_fmt rgb24 -s 1920x1080 -r 120 -i - \
+      -c:v libx264 -preset slow -crf 16 -pix_fmt yuv420p cleanslate.mp4
+```
+
+The size and rate are printed to stderr first (`#rawvideo rgb24 WxH fps N`), so a
+script can build the ffmpeg command from them.  Two things to know:
+
+* **Bandwidth is the limit.** RGB24 at 1920x1080x120 is 746 MB/s, at 3840x2160x120
+  it is 3 GB/s.  1080p120 pipes fine; 4K120 does not, and nothing in the player
+  can change that -- it is the raw frame rate.  Encode 4K by piping 1080p and
+  scaling, or by capturing at 60 fps.
+* **The render size is fixed once you pass `--width/--height`.** A hidden window
+  still gets resized by the window server, and a size change part way through the
+  pipe would silently corrupt every frame after it; the player refuses the resize
+  (with a warning) and stops with an error rather than emit a stream whose frame
+  size changed.
+
+`--yield PCT` makes a long render give the machine back: `--yield 50` sleeps half
+of each frame's own cost, halving the load and doubling the wall time.  Use it for
+anything longer than a minute that you are not actively watching.
+
 ## Reproducing the port
 
 `third_party/apEx` is a copy of the original release with a set of small,

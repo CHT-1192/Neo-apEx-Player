@@ -132,11 +132,11 @@ void CphxEvent_Shadertoy::Render( float t, float prevt, float aspect, bool subro
       {
         reportedShadertoy++;
         // No logging macro reaches this translation unit, so write it directly.
-        printf( "[shadertoy] pass %d of %d: rendertarget %p, ps %p, target %p, b0 = %.4f %.4f %.4f %.4f\n",
+        fprintf( stderr, "[shadertoy] pass %d of %d: rendertarget %p, ps %p, target %p, b0 = %.4f %.4f %.4f %.4f\n",
                 (int)x, (int)Tech->PassCount, (void*)MaterialState[ x ]->RenderTarget,
                 (void*)Tech->RenderPasses[ x ]->PS, (void*)Target,
                 ShaderData[ 0 ], ShaderData[ 1 ], ShaderData[ 2 ], ShaderData[ 3 ] );
-        fflush( stdout );
+        fflush( stderr );
       }
     }
 
@@ -295,9 +295,9 @@ void CphxEvent_ParticleCalc::Render( float t, float prevt, float aspect, bool su
       int emitters = 0;
       for ( int x = 0; x < Scene->ObjectCount; x++ )
         if ( Scene->Objects[ x ]->ObjectType == Object_ParticleEmitterCPU ) emitters++;
-      printf( "[pcalc] t=%.4f tme=%d lasttime=%d dt=%.5f s, %d object(s), %d emitter(s)\n",
+      fprintf( stderr, "[pcalc] t=%.4f tme=%d lasttime=%d dt=%.5f s, %d object(s), %d emitter(s)\n",
               t, tme, lasttime, ( tme - lasttime ) / 1000.0f, (int)Scene->ObjectCount, emitters );
-      fflush( stdout );
+      fflush( stderr );
     }
   }
 
@@ -409,9 +409,9 @@ void CphxTimeline::Render( float Frame, bool tool, bool subroutine )
       if ( reportedBlit < 8 )
       {
         reportedBlit++;
-        printf( "[blit] event target %p view %p %dx%d\n", (void*)Target, (void*)Target->View,
+        fprintf( stderr, "[blit] event target %p view %p %dx%d\n", (void*)Target, (void*)Target->View,
                 (int)Target->XRes, (int)Target->YRes );
-        fflush( stdout );
+        fflush( stderr );
       }
     }
 
@@ -430,7 +430,7 @@ void CphxTimeline::Render( float Frame, bool tool, bool subroutine )
     if ( blitScaleY < blitScale ) blitScale = blitScaleY;
     const float blitW = Target->XRes * blitScale, blitH = Target->YRes * blitScale;
     D3D11_VIEWPORT v = { ( ScreenX - blitW ) / 2.0f, ( ScreenY - blitH ) / 2.0f, blitW, blitH, 0, 1 };
-    { static int n = 0; if ( n++ < 3 ) { printf( "[blit] window %dx%d, target %dx%d -> viewport %.1f,%.1f %.1fx%.1f\n", (int)ScreenX, (int)ScreenY, (int)Target->XRes, (int)Target->YRes, v.TopLeftX, v.TopLeftY, v.Width, v.Height ); fflush( stdout ); } }
+    { static int n = 0; if ( n++ < 3 ) { fprintf( stderr, "[blit] window %dx%d, target %dx%d -> viewport %.1f,%.1f %.1fx%.1f\n", (int)ScreenX, (int)ScreenY, (int)Target->XRes, (int)Target->YRes, v.TopLeftX, v.TopLeftY, v.Width, v.Height ); fflush( stderr ); } }
     phxContext->RSSetViewports( 1, &v );
     phxContext->OMSetRenderTargets( 1, &phxBackBufferView, NULL );
     phxContext->PSSetShaderResources( 0, 1, &Target->View );

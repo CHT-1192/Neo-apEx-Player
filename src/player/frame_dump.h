@@ -19,6 +19,12 @@ namespace phxplayer
 // Returns true on success.
 bool DumpBackBufferToPPM(const char *path, std::string *error);
 
+// Reads the back buffer as tightly packed RGB24 (height * width * 3 bytes), the
+// form a raw video pipe wants: `--raw-video | ffmpeg -f rawvideo -pix_fmt rgb24`.
+bool ReadBackBufferRGB(std::vector<uint8_t> &out, UINT *width, UINT *height, std::string *error);
+bool ReadTextureRGB24(ID3D11Texture2D *texture, std::vector<uint8_t> &out, UINT *width, UINT *height,
+                      std::string *error);
+
 // Same, for any texture (used to inspect an intermediate render target, which
 // separates "the events drew nothing" from "the final blit is broken").
 bool DumpTextureToPPM(ID3D11Texture2D *texture, const char *path, std::string *error);

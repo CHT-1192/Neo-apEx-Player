@@ -1185,8 +1185,24 @@ LRESULT CCoreWindowHandlerWin::WindowProc(UINT uMsg, WPARAM wParam, LPARAM lPara
   return 0;
 }
 
+// Set when the player asked for an explicit render size.  An offline render's
+// size is part of its output contract: a window that gets resized underneath it
+// (macOS does this to a hidden window once it is mapped) would change the size
+// half way through a raw video pipe.
+bool phxLockRenderSize = false;
+
 void CCoreWindowHandlerWin::HandleResize()
 {
+  if (phxLockRenderSize)
+  {
+    static bool said = false;
+    if (!said)
+    {
+      fprintf(stderr, "phxvk warn] window resize ignored: the player was given an explicit size\n");
+      said = true;
+    }
+    return;
+  }
   SDL_Window *window = PhxWindowFromHandle(hWnd);
   if (!window) return;
 
