@@ -273,6 +273,28 @@ Two dead ends worth recording so nobody repeats them:
 frame with the update/timeline/generator/dump/present split, and the default
 (250) keeps the log quiet.
 
+## Two things about the reference video that invalidate naive frame comparisons
+
+`ffprobe` on the release video:
+
+    width=3840 height=2160  r_frame_rate=7561/126  (60.008 fps)
+
+The demo runs at **120 fps**, so the reference is a **60 fps capture of it**.
+Consequences, both of which have already caused wrong conclusions here:
+
+* Sampling the video at demo-frame granularity (1/120 s) hits the SAME video
+  frame twice in a row about half the time.  Successive samples came back
+  bit-identical (`mean abs diff 0.00`) and looked like "the port is ahead" or
+  "the port is behind" when they were showing an artefact of the sampling.
+* The video resolves 16.7 ms.  A claim like "the port runs 0.25 s early" is 15
+  video frames -- measurable, but only by aligning a window, not by eyeballing a
+  pair of frames.
+
+Also worth knowing: `--dump-frame N=FILE` matches the **iteration index**, not the
+clock frame (`d.frame == rendered`), so with `--start-frame 3600` the dump you
+want is `0=FILE`, not `3600=FILE`.  Asking for 3600 writes nothing and says
+nothing.
+
 ## Particles render. The 3:00 cloud is about which emitter is live, not the engine
 
 With the frame number and the particle life added to the diagnostic, a run over
