@@ -92,7 +92,10 @@ jobs:
     # A song in KNOWN_UNLOADABLE is expected to die in the synth.  It still runs,
     # so a regression that makes one of the five WORK is visible too, but it does
     # not paint the whole matrix red.
-    continue-on-error: ${{ contains(env.KNOWN_UNLOADABLE, matrix.song) }}
+    # Inline, not env.KNOWN_UNLOADABLE: the `env` context is not available to
+    # continue-on-error, and GitHub rejects the workflow rather than ignoring it.
+    # Spaces around the needle keep "purge015" from matching "purge015-sh".
+    continue-on-error: ${{ contains(' purge015 purge015-sh unintendedconsequence016 e0015_roughmaster impending-013-fullcut ', format(' {0} ', matrix.song)) }}
 
     steps:
       - uses: actions/checkout@v4
