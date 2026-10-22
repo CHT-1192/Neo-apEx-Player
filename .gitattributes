@@ -1,0 +1,34 @@
+# ---------------------------------------------------------------------------
+# GitHub language statistics
+#
+# The vendored engine is ~183k lines of C++ against ~39k lines of this
+# project's own code, so without this the language bar on the repository page
+# is a picture of apEx rather than of the port.
+#
+# `linguist-vendored` excludes a path from those statistics and from nothing
+# else: the files stay committed, stay browsable on GitHub, stay in every
+# clone, and stay in code search.  GitHub recomputes the statistics on the next
+# push to the default branch, a few minutes after it lands.
+# ---------------------------------------------------------------------------
+third_party/** linguist-vendored
+
+# The other direction, so that a later rule cannot swallow our own code.
+src/**     linguist-vendored=false
+tools/**   linguist-vendored=false
+tests/**   linguist-vendored=false
+compat/**  linguist-vendored=false
+ci/**      linguist-vendored=false
+
+# Prose is not code.
+docs/** linguist-documentation
+*.md    linguist-documentation
+
+# Project data and song data are not source either.
+demo/*.apx linguist-detectable=false
+demo/*.mvm linguist-detectable=false
+
+# Binaries: never diff them, never let git guess.
+*.lib binary
+*.a   binary
+*.64k binary
+*.apxsndcache binary
