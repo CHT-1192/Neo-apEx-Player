@@ -47,6 +47,15 @@ env:
     step010padding step010 unintendedconsequence016 e0015_roughmaster
     off0021_things purge015-sh purge015 dissipate_007c_noglitch
     veins022-rc3 impending-013-fullcut
+  # These five kill the closed-source synthesiser inside
+  # mvxSystem_LoadMusic: it prints the file banner and then dies without a
+  # message, having written nothing.  Exit code 0, so a step that only checked
+  # errorlevel saw a success.  There is no source in the release to fix it --
+  # third_party/apEx/MVX is mvx.h and nothing else -- so they are recorded here
+  # rather than pretending to render them.
+  KNOWN_UNLOADABLE: >-
+    purge015 purge015-sh unintendedconsequence016 e0015_roughmaster
+    impending-013-fullcut
 
 jobs:
   pick:
@@ -80,6 +89,10 @@ jobs:
       fail-fast: false
       matrix:
         song: ${{ fromJSON(needs.pick.outputs.songs) }}
+    # A song in KNOWN_UNLOADABLE is expected to die in the synth.  It still runs,
+    # so a regression that makes one of the five WORK is visible too, but it does
+    # not paint the whole matrix red.
+    continue-on-error: ${{ contains(env.KNOWN_UNLOADABLE, matrix.song) }}
 
     steps:
       - uses: actions/checkout@v4
@@ -128,8 +141,15 @@ jobs:
           rem container, which the player discovers on its own.
           dir demo\music\${{ matrix.song }}.mvm
           mvx_render.exe demo\music\${{ matrix.song }}.mvm ${{ matrix.song }}.wav ${{ matrix.song }}.apxsndcache
-          if errorlevel 1 (
-            echo ::error title=mvx_render failed::exit %errorlevel%
+          rem The synth can exit 0 having written nothing (it faults inside
+          rem mvxSystem_LoadMusic), so errorlevel alone is not evidence.  Demand
+          rem the files.
+          if not exist ${{ matrix.song }}.wav (
+            echo ::error title=synth produced nothing::${{ matrix.song }}: no WAV written. If this song is in KNOWN_UNLOADABLE, that is the known failure.
+            exit /b 1
+          )
+          if not exist ${{ matrix.song }}.apxsndcache (
+            echo ::error title=synth produced nothing::${{ matrix.song }}: no SoundCache written.
             exit /b 1
           )
           dir ${{ matrix.song }}.wav ${{ matrix.song }}.apxsndcache
