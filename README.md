@@ -242,6 +242,11 @@ script can build the ffmpeg command from them.  Two things to know:
   (with a warning) and stops with an error rather than emit a stream whose frame
   size changed.
 
+If you would rather not assemble the command by hand,
+[`.claude/skills/record-demo/`](.claude/skills/record-demo/SKILL.md) is an agent
+skill that does it: `record.sh <project.apx> <out.mp4> [WxH] [frames]` reads the
+size and rate from the player's own header and pipes the render into x264.
+
 `--yield PCT` makes a long render give the machine back: `--yield 50` sleeps half
 of each frame's own cost, halving the load and doubling the wall time.  Use it for
 anything longer than a minute that you are not actively watching.
