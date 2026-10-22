@@ -1435,6 +1435,7 @@ int main(int argc, char **argv)
     else clock.Update();
 
     rendered++;
+    if (rendered % 300 == 0) phxvk::PrintFrameStats();
     if (opt.frames >= 0 && rendered >= opt.frames) break;
     if (phxDone) phxvk::LogInfo("the timeline ended the demo at frame %lld", (long long)clock.Frame());
     if (song.valid && clock.Finished())

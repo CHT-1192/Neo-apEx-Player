@@ -43,6 +43,7 @@ struct Device
   VkCommandBuffer frameCmd = VK_NULL_HANDLE;
   bool frameActive = false;
   VkFence frameFence = VK_NULL_HANDLE;
+  uint64_t lastFrameStartNs = 0; // [port] for the frame-cost breakdown
   uint64_t frameIndex = 0;
 
   // A single staging buffer queued for destruction once the frame completes.
@@ -64,6 +65,10 @@ void vkInitialize(bool enableValidation, const char *appName);
 void vkRequestValidation(bool enable);
 bool vkValidationRequested();
 void vkShutdown();
+
+// Prints the accumulated frame cost, split into "blocked on the GPU" and "the
+// CPU was working", then resets the counters.
+void PrintFrameStats();
 
 // Extra instance extensions (e.g. the VK_KHR_surface / VK_EXT_metal_surface
 // pair SDL asks for).  Must be called *before* vkInitialize(); extensions that

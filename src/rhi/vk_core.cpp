@@ -524,11 +524,40 @@ VkCommandBuffer FrameCommandBuffer() { return g_device.frameCmd; }
 
 static void FlushDeferred(Device &d); // defined below FrameWaitIdle()
 
+// What a frame costs, split the only way that matters for the single-frame-in-
+// flight design: time spent blocking on the GPU fence (the GPU was still
+// drawing) versus everything else (the CPU was working).  If the former
+// dominates, more frames in flight would not help; if they are comparable, it
+// would roughly halve the frame time.
+static uint64_t g_waitNs = 0, g_frameNs = 0;
+static uint64_t g_framesTimed = 0;
+
+static uint64_t NowNs()
+{
+  using clock = std::chrono::steady_clock;
+  return (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(clock::now().time_since_epoch()).count();
+}
+
+void PrintFrameStats()
+{
+  if (!g_framesTimed) return;
+  const double frames = (double)g_framesTimed;
+  LogInfo("[frame] %llu frame(s): %.2f ms each, of which %.2f ms blocked on the GPU (%.0f%%), %.2f ms CPU",
+          (unsigned long long)g_framesTimed, g_frameNs / 1e6 / frames, g_waitNs / 1e6 / frames,
+          g_frameNs ? 100.0 * (double)g_waitNs / (double)g_frameNs : 0.0,
+          (g_frameNs - g_waitNs) / 1e6 / frames);
+  g_waitNs = g_frameNs = g_framesTimed = 0;
+}
+
 void FrameBegin()
 {
   Device &d = g_device;
   if (d.frameActive) return;
+  const uint64_t beginNs = NowNs();
   vkWaitForFences(d.device, 1, &d.frameFence, VK_TRUE, UINT64_MAX);
+  g_waitNs += NowNs() - beginNs;
+  if (d.lastFrameStartNs) { g_frameNs += beginNs - d.lastFrameStartNs; g_framesTimed++; }
+  d.lastFrameStartNs = beginNs;
   vkResetFences(d.device, 1, &d.frameFence);
 
   // Release what the engine freed during the previous frame.
