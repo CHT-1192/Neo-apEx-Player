@@ -98,6 +98,11 @@ against a demo that runs at 120 fps. It resolves 16.7 ms, so:
 Prefer `--raw-video` for anything that needs frame-exact truth: pipe a range,
 encode it, and compare encoded frames to encoded frames.
 
+## Related
+
+Making or fixing the project itself is the other skill:
+[`../author-apx/SKILL.md`](../author-apx/SKILL.md).
+
 ## Reference points
 
 * Timeline rate: 120 fps. Clean Slate is 284.44 s, so the whole demo is 34,133
