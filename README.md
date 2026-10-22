@@ -44,9 +44,13 @@ gh workflow run mvx-windows.yml -f only=step010padding -f upload=true
 gh run download --name music-step010padding
 ```
 
-By default that workflow only *verifies* each song — non-silent, plausible
-length, valid cache — and uploads nothing, because ten rendered tracks are ~400 MB
-of artifact for files that can be re-rendered on demand. Ask for `upload=true`
+Five of those ten render; five kill the closed-source synth inside
+`mvxSystem_LoadMusic` before it can say why, so four of the eight bundled projects
+can have their music at all (`docs/STATUS.md` has the table, and the workflow
+lists them as `KNOWN_UNLOADABLE`). By default the workflow only *verifies* each
+song — non-silent, plausible length, valid cache — and uploads nothing, because
+ten rendered tracks are ~400 MB of artifact for files that can be re-rendered on
+demand. Ask for `upload=true`
 when you actually want the files. Put the `.apxsndcache` next to the project (or
 in `SoundCache/`) and the player finds it; `--music FILE` also takes a 16-bit PCM
 WAV.

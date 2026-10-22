@@ -21,6 +21,35 @@ toolchain, which this project neither produces nor consumes.  What is validated
 here is the picture and the timeline on other platforms, and every "verified"
 claim below is about that, not about size.
 
+## Which songs the closed-source synth can render
+
+The `MVX (Windows)` workflow now renders **all ten** `.mvm` files the apEx release
+ships.  Run on 2026-10-22, it split them cleanly:
+
+| Song | Project | Result |
+| --- | --- | --- |
+| `step010padding` | Clean Slate | **284.44 s** |
+| `step010` | Clean Slate (alternate) | **275.90 s** |
+| `dissipate_007c_noglitch` | One of These Days The Sky's Gonna Break | **169.83 s** |
+| `off0021_things` | Offscreen Colonies | **244.80 s** |
+| `veins022-rc3` | Vessel | **335.74 s** |
+| `e0015_roughmaster` | Supermode | dies in `mvxSystem_LoadMusic` |
+| `unintendedconsequence016` | Universal Sequence | dies in `mvxSystem_LoadMusic` |
+| `impending-013-fullcut` | Darkness Lay Your Eyes Upon Me | dies in `mvxSystem_LoadMusic` |
+| `purge015`, `purge015-sh` | When Silence Dims the Stars Above | die in `mvxSystem_LoadMusic` |
+
+So four of the eight bundled projects can have their soundtrack rendered by this
+tool and four cannot.  The failing five print the file banner and stop with **no
+message and exit code 0**, which is why the workflow demands the output files
+rather than trusting `errorlevel`.
+
+It is not a format version mismatch that a header check could catch: all ten carry
+the same `MVM\0` magic and their header fields decode plausibly (92-190 bpm,
+1472-3104 ticks, 46-122 machines).  It cannot be fixed in this repository --
+`third_party/apEx/MVX/` is `mvx.h` and the x86-32 static libraries, with no
+implementation to read.  The five are listed as `KNOWN_UNLOADABLE` in the
+workflow so the next person does not spend an evening proving the harness works.
+
 ## Architecture (decided, do not relitigate)
 
 Reuse the original engine rather than rewriting it:
