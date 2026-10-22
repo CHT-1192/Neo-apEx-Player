@@ -1,19 +1,20 @@
 # Neo-apEx-Player
 
-**Plays apEx demos on macOS.** For example Conspiracy's
-[**Clean Slate**](https://www.youtube.com/watch?v=O3T1-nadehU) (2023): 284
-seconds, 34132 frames at 120 fps, with its music, end to end.
+**Plays apEx projects on macOS.** For example Conspiracy's
+[**Clean Slate**](https://www.pouet.net/prod.php?which=88524) — the 64k intro that
+won the pc 64k compo at Revision 2021, by BoyC (code), Gargaj (audio) and zoom
+(visuals). 284 seconds, 34132 frames at 120 fps, with its music, end to end.
 
 It is a Vulkan player for `.apx` projects, built by porting the original
 [apEx engine](https://github.com/Conspiracy/apEx-public) rather than
-reimplementing it — the demo runs on the real engine code, through a
+reimplementing it — the intro runs on the real engine code, through a
 D3D11-on-Vulkan shim.
 
 > [!IMPORTANT]
 > **Unofficial.** Not affiliated with, endorsed by, or authorised by Conspiracy,
 > who made apEx and Clean Slate. The engine, the project data and the music are
 > their work; this project claims only its own source code, and ships no
-> recording of the demo or its soundtrack. See [Licence](#licence).
+> recording of the intro or its soundtrack. See [Licence](#licence).
 
 ## Quick start
 
@@ -136,7 +137,7 @@ and the script is idempotent.
 ## Licence
 
 The port's own code — `src/`, `tools/`, `tests/`, `docs/` — is **Apache 2.0**.
-The vendored engine, the demo project and the song are **Conspiracy's**, under
+The vendored engine, the project and the song are **Conspiracy's**, under
 **CC BY-NC 4.0**: attribution, modifications indicated, **no commercial use**.
 
 The repository as a whole is therefore not for commercial use, and, CC BY-NC not

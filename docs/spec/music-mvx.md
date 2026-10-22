@@ -1,6 +1,6 @@
 # Music backend for the cross-platform Vulkan apEx player — MVX and the `.mvm` container
 
-Target: play the music of **Clean Slate** (Conspiracy, 2023) in a portable (macOS/Linux/Windows)
+Target: play the music of **Clean Slate** (Conspiracy, 2021) in a portable (macOS/Linux/Windows)
 Vulkan player, without the Windows-only apEx tool.
 
 * Source under analysis (READ-ONLY): `~/Repos/apEx-public/`

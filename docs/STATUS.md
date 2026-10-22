@@ -6,7 +6,8 @@ resuming; `docs/spec/*.md` holds the reverse-engineered formats and
 
 ## Goal
 
-A cross-platform Vulkan player for the apEx demotool (Conspiracy, 2014-2023),
+A cross-platform Vulkan player for the apEx demotool (Conspiracy, used since
+Supermode in 2014; the acceptance title is Clean Slate, Revision 2021),
 validated by loading and rendering `Projects/Clean Slate/cleanslate.apx`.
 
 ## Architecture (decided, do not relitigate)
