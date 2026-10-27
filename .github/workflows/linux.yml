@@ -53,7 +53,7 @@ jobs:
             build-essential cmake pkg-config curl ca-certificates \
             libvulkan-dev libshaderc-dev libvulkan1 mesa-vulkan-drivers \
             libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev \
-            libxss-dev libasound2-dev libwayland-dev
+            libxss-dev libxtst-dev libxkbcommon-dev libasound2-dev libwayland-dev
 
       # Ubuntu 24.04 has no libsdl3-dev, so build the release tag.  The tag is
       # looked up rather than hard-coded: a pinned one rots, and this is the only
