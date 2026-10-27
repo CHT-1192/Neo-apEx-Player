@@ -95,7 +95,9 @@ extern "C" DWORD GetTickCount(void)
   return (DWORD)((unsigned long long)ts.tv_sec * 1000ull + ts.tv_nsec / 1000000ull);
 }
 
-extern "C" unsigned long long GetTickCount64(void)
+// ULONGLONG, not "unsigned long long": uint64_t is unsigned long on Linux and
+// unsigned long long on macOS, and this has to match the declaration.
+extern "C" ULONGLONG GetTickCount64(void)
 {
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
