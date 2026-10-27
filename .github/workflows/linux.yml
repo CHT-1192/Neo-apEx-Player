@@ -9,26 +9,14 @@ name: Linux
 # Deliberately not MoltenVK-shaped: it uses the Vulkan loader from apt plus
 # Mesa's lavapipe software driver, so `phx_smoke` can render on a runner with no
 # GPU at all.
+# Manual only (Actions -> Linux -> Run workflow).
+#
+# This was on push, and it failed on every push while the portability defects were
+# being found one at a time -- which mailed a failure notification for each of
+# them, several minutes apart, at two in the morning.  A job that is being used as
+# a debugger must not be wired to push: run it deliberately, read the log here,
+# and dispatch again when there is something new to learn.
 on:
-  push:
-    branches: [main]
-    paths:
-      - "src/**"
-      - "compat/**"
-      - "tests/**"
-      - "tools/**"
-      - "cmake/**"
-      - "CMakeLists.txt"
-      - ".github/workflows/linux.yml"
-  pull_request:
-    paths:
-      - "src/**"
-      - "compat/**"
-      - "tests/**"
-      - "tools/**"
-      - "cmake/**"
-      - "CMakeLists.txt"
-      - ".github/workflows/linux.yml"
   workflow_dispatch:
 
 concurrency:
