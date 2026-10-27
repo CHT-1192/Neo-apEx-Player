@@ -109,9 +109,6 @@ jobs:
 
       - name: Show the toolchain
         run: |
-          # clang-cl, not cl: same ABI, same headers, different front end.  The
-          # libraries are MSVC-built and link either way.
-          clang-cl --version
           cl 2>&1 | findstr /C:"Version"
           dumpbin /headers third_party\apEx\Libraries\MVX\mvxPlayerLib_vs2019_releasestatic.lib 2>&1 | findstr /C:"machine" | findstr /C:"14C" && echo "library is i386 as expected"
 
@@ -122,16 +119,16 @@ jobs:
         # environment is what proves the toolchain matches the libraries.
         shell: cmd
         run: |
-          rem /MD: clang-cl links no CRT at all until a runtime is named (cl
-          rem defaults to /MT), so an explicit choice is required here.  UCRT it
-          rem is; the question this step answers is whether the prebuilt player
-          rem library agrees with it -- if LNK2019 names __imp__rand or
-          rem __except_handler4_common, the legacy msvcrt path is still needed.
-          clang-cl /nologo /EHsc /O2 /W3 /MD -fuse-ld=link ^
+          rem The library predates the Universal CRT: it imports __imp__rand and
+          rem __except_handler4_common from msvcrt.dll, so linking it against the
+          rem default UCRT fails with LNK2019.  Select the legacy import library
+          rem explicitly (msvcrt.lib) and drop libucrt from the default set.
+          cl /nologo /EHsc /O2 /W3 ^
              /I third_party\apEx\Libraries\MVX ^
              tools\mvx_render.cpp ^
              third_party\apEx\Libraries\MVX\mvxPlayerLib_vs2019_releasestatic.lib ^
-             /link msvcrt.lib ucrt.lib libvcruntime.lib legacy_stdio_definitions.lib oldnames.lib ^
+             /link /NODEFAULTLIB:libucrt.lib /NODEFAULTLIB:libvcruntime.lib ^
+             msvcrt.lib legacy_stdio_definitions.lib oldnames.lib ^
              dsound.lib winmm.lib ^
              /OUT:mvx_render.exe
           dir mvx_render.exe
