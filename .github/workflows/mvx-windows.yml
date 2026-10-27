@@ -109,8 +109,8 @@ jobs:
 
       - name: Show the toolchain
         run: |
-          rem clang-cl, not cl: the same ABI and the same headers, a different
-          rem front end.  The libraries are MSVC-built and link either way.
+          # clang-cl, not cl: same ABI, same headers, different front end.  The
+          # libraries are MSVC-built and link either way.
           clang-cl --version
           cl 2>&1 | findstr /C:"Version"
           dumpbin /headers third_party\apEx\Libraries\MVX\mvxPlayerLib_vs2019_releasestatic.lib 2>&1 | findstr /C:"machine" | findstr /C:"14C" && echo "library is i386 as expected"
