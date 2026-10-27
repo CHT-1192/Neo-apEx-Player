@@ -18,7 +18,9 @@
 #include <pthread.h>
 #include <semaphore.h>
 #include <sys/mman.h>
-#include <sys/sysctl.h>
+#if defined(__APPLE__)
+#include <sys/sysctl.h>   // hw.memsize; Linux has no sysctl and uses sysconf below
+#endif
 #include <sys/time.h>
 #include <time.h>
 
