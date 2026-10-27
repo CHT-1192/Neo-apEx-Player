@@ -101,8 +101,10 @@ command line instead.
 ## What works, and what does not
 
 Clean Slate runs correctly: loading screen, all 284 seconds, particles, text,
-shaders, audio sync. The other bundled apEx projects load and render too, and the
-port is clean under `VK_LAYER_KHRONOS_validation`.
+shaders, audio sync. The other seven bundled apEx projects have each been run for
+3000 frames (25 s) — exit 0, frames rendered, import errors only where a shipped
+project already has them (`docs/STATUS.md` has the table). The port is clean under
+`VK_LAYER_KHRONOS_validation`.
 
 Known limits, all logged at runtime:
 

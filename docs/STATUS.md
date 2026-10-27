@@ -1112,12 +1112,32 @@ because "needs investigation" is how a list like this rots.
    *Closing it:* one full playthrough at 320x180 (~4 min), comparing port and
    reference frame by frame across the particle section.
 
-2. **Only Clean Slate has frame-level evidence.**  The other seven bundled
-   projects are known to import and render (the hostile-case corpus and the `.mvm`
-   runs both touch them), but none has been compared against its own original
-   video.  The README's "load and render" means exactly that and nothing more.
-   *Closing it:* the same low-resolution dump-and-compare loop, one project at a
-   time.  This is the largest gap between what is claimed and what is measured.
+2. **The other seven projects have run, but not been compared.**  All eight
+   bundled projects now load and render **3000 frames** (25 s at 120 fps) with
+   exit code 0 and content on the last frame:
+
+   | Project | exit | `[import]` lines | peak byte at frame 3000 |
+   | --- | --- | --- | --- |
+   | Clean Slate | 0 | 0 | 0 (still fading in) |
+   | Darkness Lay Your Eyes Upon Me | 0 | 0 | 114 |
+   | Offscreen Colonies | 0 | 0 | 255 |
+   | One of These Days The Sky's Gonna Break | 0 | 0 | 131 |
+   | Supermode | 0 | 0 | 255 |
+   | Universal Sequence | 0 | 0 | 253 |
+   | Vessel | 0 | 98 | 245 |
+   | When Silence Dims the Stars Above | 0 | 0 | 251 |
+
+   Vessel's 98 lines are **one GUID referenced by 98 events**, the same tolerated
+   class as the 35 that `demo/cleanslate.apx` reports -- a shadertoy parameter the
+   imported technique does not carry.
+
+   What this is **not**: a comparison against each project's own video.  Those
+   are not in the repository and are gigabytes each, so for the seven,
+   *correctness* is still asserted rather than measured; what is measured is that
+   the importer accepts each file and the renderer produces frames.  The README
+   says "load and render" and now has a table behind it.
+   *Closing it:* obtain one reference per project and run the dump-and-compare
+   loop that was used for Clean Slate.
 
 3. **Geometry shader coverage has three known holes**, all in
    `src/rhi/gs_emulation.cpp`: the fat vertex is a vertex buffer, so a shader
