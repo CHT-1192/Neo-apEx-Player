@@ -1,0 +1,104 @@
+name: Linux
+
+# The port targets macOS and has never been built anywhere else.  This job is the
+# first attempt, not a promise: it configures, builds and runs the tests on
+# Ubuntu, and every failure it reports is a real portability defect that macOS
+# hides -- a case-insensitive filesystem, a header macOS has and Linux does not,
+# a toolchain difference.
+#
+# Deliberately not MoltenVK-shaped: it uses the Vulkan loader from apt plus
+# Mesa's lavapipe software driver, so `phx_smoke` can render on a runner with no
+# GPU at all.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "compat/**"
+      - "tests/**"
+      - "tools/**"
+      - "cmake/**"
+      - "CMakeLists.txt"
+      - ".github/workflows/linux.yml"
+  pull_request:
+    paths:
+      - "src/**"
+      - "compat/**"
+      - "tests/**"
+      - "tools/**"
+      - "cmake/**"
+      - "CMakeLists.txt"
+      - ".github/workflows/linux.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    env:
+      SDL3_PREFIX: ${{ github.workspace }}/.sdl3
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake pkg-config curl ca-certificates \
+            libvulkan-dev libshaderc-dev libvulkan1 mesa-vulkan-drivers \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev \
+            libxss-dev libasound2-dev libwayland-dev
+
+      # Ubuntu 24.04 has no libsdl3-dev, so build the release tag.  The tag is
+      # looked up rather than hard-coded: a pinned one rots, and this is the only
+      # dependency fetched at build time.
+      - name: Build SDL3
+        run: |
+          set -euo pipefail
+          tag=$(git ls-remote --tags --refs https://github.com/libsdl-org/SDL.git 'release-3.*' \
+                | sed 's|.*refs/tags/||' | sort -V | tail -1)
+          echo "SDL3 tag: $tag"
+          curl -sSL -o sdl3.tar.gz "https://github.com/libsdl-org/SDL/archive/refs/tags/$tag.tar.gz"
+          tar xf sdl3.tar.gz
+          cmake -S "SDL-${tag#release-}" -B sdl3-build \
+            -DCMAKE_INSTALL_PREFIX="$SDL3_PREFIX" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF \
+            -DSDL_X11=ON -DSDL_WAYLAND=OFF
+          cmake --build sdl3-build -j"$(nproc)"
+          cmake --install sdl3-build
+
+      - name: Configure
+        run: |
+          set -euo pipefail
+          export PKG_CONFIG_PATH="$SDL3_PREFIX/lib/pkgconfig:$SDL3_PREFIX/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"
+          pkg-config --modversion sdl3 vulkan shaderc
+          cmake -S . -B build -DAPEX_BUILD_PLAYER=ON -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          export PKG_CONFIG_PATH="$SDL3_PREFIX/lib/pkgconfig:$SDL3_PREFIX/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"
+          cmake --build build -j"$(nproc)"
+
+      # CPU-only tests first: they distinguish "the code is portable" from "the
+      # machine has no usable Vulkan device".
+      - name: Test — XML, song reader, geometry-shader analysis, shader interfaces
+        run: |
+          set -euo pipefail
+          for t in phx_xml_test phx_song_pcm_test phx_gs_test phx_interface_test; do
+            echo "== $t"
+            "./build/$t"
+          done
+
+      - name: Test — render smoke test on lavapipe
+        run: |
+          set -euo pipefail
+          vulkaninfo --summary 2>/dev/null | sed -n '1,20p' || true
+          ./ci/run-vulkan-test.sh ./build/phx_smoke

@@ -42,6 +42,25 @@ target_compile_definitions(apex_compat_flags INTERFACE
 
 # compat/ must precede the system headers so our Windows.h/D3D11 shims win.
 set(APEX_COMPAT_INCLUDE ${CMAKE_CURRENT_SOURCE_DIR}/compat)
+
+# The compat headers are capitalised where Windows capitalises them (Windows.h,
+# MMSystem.h), and the vendored engine includes them the way MSVC does -- which
+# is case-insensitively, so <windows.h> and <mmsystem.h> appear as often as the
+# capitalised spelling.  That works on a case-insensitive filesystem (macOS) and
+# fails on Linux, where the include simply is not found.
+#
+# Generate lowercase aliases into the build tree rather than shipping a second
+# copy of every header in the repository -- or a stack of symlinks that some
+# checkouts (Windows, archive exports) turn into text files.
+set(APEX_COMPAT_LOWERCASE ${CMAKE_BINARY_DIR}/compat-lowercase)
+file(MAKE_DIRECTORY ${APEX_COMPAT_LOWERCASE})
+file(GLOB APEX_COMPAT_HEADERS RELATIVE ${APEX_COMPAT_INCLUDE} ${APEX_COMPAT_INCLUDE}/*.h)
+foreach(_header ${APEX_COMPAT_HEADERS})
+  string(TOLOWER ${_header} _lower)
+  if(NOT _lower STREQUAL _header)
+    file(WRITE ${APEX_COMPAT_LOWERCASE}/${_lower} "#include \"${_header}\"\n")
+  endif()
+endforeach()
 set(APEX_THIRD_PARTY ${CMAKE_CURRENT_SOURCE_DIR}/third_party/apEx)
 
 # ---------------------------------------------------------------------------
@@ -139,6 +158,7 @@ phx_apex_sources(phx_window_test
 target_include_directories(phx_window_test PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/platform
   ${APEX_COMPAT_INCLUDE}
+  ${APEX_COMPAT_LOWERCASE}
   ${APEX_THIRD_PARTY}/Bedrock/CoRE2
   ${APEX_THIRD_PARTY}/Bedrock/UtilLib
   ${APEX_THIRD_PARTY}/Bedrock/UtilLib/RapidXML
@@ -178,6 +198,7 @@ add_library(phx_d3d11 STATIC
 # window_sdl.h includes the vendored WindowHandler.h and XMLDocument.h.
 target_include_directories(phx_d3d11 PRIVATE
   ${APEX_COMPAT_INCLUDE}
+  ${APEX_COMPAT_LOWERCASE}
   ${CMAKE_CURRENT_SOURCE_DIR}/src
   ${APEX_THIRD_PARTY}/Bedrock/CoRE2
   ${APEX_THIRD_PARTY}/Bedrock/UtilLib
@@ -201,6 +222,7 @@ target_compile_options(phx_d3d11 PRIVATE -Wno-everything)
 add_executable(phx_smoke tests/vk_d3d11_smoke.cpp)
 target_include_directories(phx_smoke PRIVATE
   ${APEX_COMPAT_INCLUDE}
+  ${APEX_COMPAT_LOWERCASE}
   ${CMAKE_CURRENT_SOURCE_DIR}/src
   ${CMAKE_CURRENT_SOURCE_DIR}/src/platform
   ${APEX_THIRD_PARTY}/Bedrock/CoRE2
@@ -263,7 +285,8 @@ if(APPLE)
     src/platform/gdi_posix.cpp
   )
   target_include_directories(phx_gdi_test PRIVATE
-    ${APEX_COMPAT_INCLUDE}          # must come first: it shadows <Windows.h>
+    ${APEX_COMPAT_INCLUDE}
+  ${APEX_COMPAT_LOWERCASE}          # must come first: it shadows <Windows.h>
     ${CMAKE_CURRENT_SOURCE_DIR}/src
   )
   target_compile_options(phx_gdi_test PRIVATE
@@ -304,6 +327,7 @@ add_library(phx_xml STATIC
 )
 target_include_directories(phx_xml PUBLIC
   ${APEX_COMPAT_INCLUDE}
+  ${APEX_COMPAT_LOWERCASE}
   ${APEX_THIRD_PARTY}/Bedrock/UtilLib
   ${APEX_THIRD_PARTY}/Bedrock/UtilLib/RapidXML
 )
