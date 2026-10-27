@@ -1099,19 +1099,67 @@ reproducible.  Run both after any `third_party` change.
 
 ## Open work
 
-1. `CphxMaterialSpline::CalculateValue` crashes around demo frames 14990-15010.
-   `Material.cpp:220-224` walks all four `Splines[x]` with no null check, and one
-   of them points at freed memory: a stack sample shows
-   `CphxSpline::CalculateValue` taking the `KeyCount == 1` path (so `Keys` and
-   `KeyCount` are still intact) and then loading *this object's own vptr* as
-   `0x186678`, which is not a vtable - the classic signature of a block reused
-   after free.  Reached only from `CphxEvent_RenderScene::Render` for the scene
-   active in that window; frames 13000 and 20000 are fine.  Not yet diagnosed
-   beyond that.
-2. `--fixed-fps` cannot keep up with Clean Slate's 120 fps; it is an offline
-   tool, not a playback mode (documented).
-3. The MVX synth itself is still Windows-only, so the music comes from a
-   pre-rendered track (see MILESTONE 4).
+What is left, as of the last verified state.  Each item says what would close it,
+because "needs investigation" is how a list like this rots.
+
+1. **Frame 21600 (3:00) renders without the reference's particle cloud.**  The
+   particle path is not the problem any more: a low-resolution playthrough peaks
+   at **1000 live particles**, `emit/s` reads 64 and 128 where it used to read 0,
+   and frame 16100 side by side with the reference shows the same dust motes.
+   What is left is a *timelines* question -- which emitter or sub-scene should be
+   live at that instant; at 21600 the port's emitter is at the end of its life
+   and the emission spline has decayed to zero there.
+   *Closing it:* one full playthrough at 320x180 (~4 min), comparing port and
+   reference frame by frame across the particle section.
+
+2. **The port runs about 0.25 s early on scene changes** (first noticed at ~55 s,
+   where it cuts before the reference does).  Not measured precisely yet, and the
+   reference cannot measure it to better than 16.7 ms: the release video is
+   60.008 fps against a 120 fps demo, so half of any demo-frame pairing is a
+   duplicated frame.
+   *Closing it:* window alignment on the 60 fps grid -- two seconds of frames
+   from each side, slid against each other, and the offset falls out; then find
+   whether the clock or the event `t` mapping is responsible.
+
+3. **Only Clean Slate has frame-level evidence.**  The other seven bundled
+   projects are known to import and render (the hostile-case corpus and the `.mvm`
+   runs both touch them), but none has been compared against its own original
+   video.  The README's "load and render" means exactly that and nothing more.
+   *Closing it:* the same low-resolution dump-and-compare loop, one project at a
+   time.  This is the largest gap between what is claimed and what is measured.
+
+4. **Geometry shader coverage has three known holes**, all in
+   `src/rhi/gs_emulation.cpp`: the fat vertex is a vertex buffer, so a shader
+   emitting more than six vertices per primitive is refused; the analysis runs on
+   the source rather than the preprocessed shader, so an `Append` hidden behind a
+   `#define` is missed; and `Append` counting sums across paths, so a `switch`
+   whose arms are exclusive is refused for the wrong reason.
+   *Closing it:* storage-buffer fat vertex, preprocess before analysing, count
+   appends per control-flow path.
+
+5. **No build has been attempted on Windows or Linux.**  Windows would need
+   `compat/` disabled (the real SDK headers are the point there); Linux needs the
+   case-sensitivity shim and a decision about the GDI subset.
+   *Closing it:* a CI matrix job that configures and runs `phx_smoke`.
+
+6. **Five of the ten shipped songs cannot be loaded by the closed-source synth**
+   (table above).  Not fixable here: the release has `mvx.h` and the x86-32
+   library, no implementation.  Recorded so nobody re-derives it.
+
+7. **`--fixed-fps` still cannot hold 120 fps** at the resolutions tested, so it
+   remains an offline rendering mode rather than a playback mode.  Two frames in
+   flight took a 320x180 frame from 17.99 ms to 9.61 ms against an 8.33 ms budget
+   -- close, not met at 720p.
+
+Fixed since this list was first written:
+
+* **The frames 14990-15010 crash no longer reproduces.**  It was
+  `CphxMaterialSpline::CalculateValue` walking a freed spline, and two full-length
+  runs since (16100 and 21601 frames) pass straight through that window.
+* **The loading screen renders**, and the setup dialog's resize crash is handled
+  (MILESTONE 5, MILESTONE 8).
+* **The MVX synth is still Windows-only** but no longer a manual one-off:
+  `MVX (Windows)` has a matrix over every shipped `.mvm`.
 
 ## Verified details worth not re-deriving
 
