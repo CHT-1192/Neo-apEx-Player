@@ -131,7 +131,7 @@ jobs:
              /I third_party\apEx\Libraries\MVX ^
              tools\mvx_render.cpp ^
              third_party\apEx\Libraries\MVX\mvxPlayerLib_vs2019_releasestatic.lib ^
-             /link legacy_stdio_definitions.lib oldnames.lib ^
+             /link msvcrt.lib ucrt.lib libvcruntime.lib legacy_stdio_definitions.lib oldnames.lib ^
              dsound.lib winmm.lib ^
              /OUT:mvx_render.exe
           dir mvx_render.exe
