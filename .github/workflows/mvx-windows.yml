@@ -127,7 +127,7 @@ jobs:
           rem is; the question this step answers is whether the prebuilt player
           rem library agrees with it -- if LNK2019 names __imp__rand or
           rem __except_handler4_common, the legacy msvcrt path is still needed.
-          clang-cl /nologo /EHsc /O2 /W3 /MD ^
+          clang-cl /nologo /EHsc /O2 /W3 /MD -fuse-ld=link ^
              /I third_party\apEx\Libraries\MVX ^
              tools\mvx_render.cpp ^
              third_party\apEx\Libraries\MVX\mvxPlayerLib_vs2019_releasestatic.lib ^
