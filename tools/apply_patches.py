@@ -19,6 +19,13 @@ TP = os.path.join(ROOT, "third_party", "apEx")
 # (relative path, old text, new text, note)
 PATCHES = [
     (
+        "Bedrock/BaseLib/Thread.h",
+        "#include <Thread>",
+        "#include <thread>   // [port] MSVC resolved <Thread> case-insensitively to this",
+        "MSVC's filesystem is case-insensitive, so <Thread> found the standard "
+        "<thread>; on Linux there is no such header and the build stops here.",
+    ),
+    (
         "Bedrock/BaseLib/StackTracker.h",
         "enum LOGVERBOSITY;",
         "enum LOGVERBOSITY : int;",
@@ -1189,60 +1196,6 @@ private:""",
         "guard the SplineResults[] index on the read side too.",
     ),
     (
-        "Phoenix/Timeline.cpp",
-        """    //render here
-    phxContext->Draw( 6, 0 );""",
-        """    // [port] diagnostic: a shader-toy pass with nowhere to draw, or with no
-    // pixel shader, renders nothing and says nothing about it.  The loading
-    // screen is exactly this path, and it came out blank without a single log
-    // line pointing at it, so report the first few passes' state -- including
-    // the four floats that become cbuffer b0, whose XRes/YRes entries are only
-    // written when Target is non-null.
-    {
-      static int reportedShadertoy = 0;
-      if ( reportedShadertoy < 8 )
-      {
-        reportedShadertoy++;
-        // No logging macro reaches this translation unit, so write it directly.
-        printf( "[shadertoy] pass %d of %d: rendertarget %p, ps %p, target %p, b0 = %.4f %.4f %.4f %.4f\\n",
-                (int)x, (int)Tech->PassCount, (void*)MaterialState[ x ]->RenderTarget,
-                (void*)Tech->RenderPasses[ x ]->PS, (void*)Target,
-                ShaderData[ 0 ], ShaderData[ 1 ], ShaderData[ 2 ], ShaderData[ 3 ] );
-        fflush( stdout );
-      }
-    }
-
-    //render here (after the [shadertoy] diagnostic above)
-    phxContext->Draw( 6, 0 );""",
-        "a shader-toy pass with no render target renders nothing silently; this is "
-        "the loading-screen path.",
-    ),
-    (
-        "Phoenix/Timeline.cpp",
-        """    //display frame
-    Prepare2dRender();""",
-        """    // [port] diagnostic: the shader-toy pass above draws into
-    // MaterialState[x]'s render target, and this blit reads the EVENT's Target.
-    // When those are two different objects the pass renders into an image
-    // nobody looks at and the screen stays blank with nothing in the log to say
-    // so.
-    {
-      static int reportedBlit = 0;
-      if ( reportedBlit < 8 )
-      {
-        reportedBlit++;
-        printf( "[blit] event target %p view %p %dx%d\\n", (void*)Target, (void*)Target->View,
-                (int)Target->XRes, (int)Target->YRes );
-        fflush( stdout );
-      }
-    }
-
-    //display frame (after the [blit] diagnostic above)
-    Prepare2dRender();""",
-        "a blit that reads a different render target than the pass drew into leaves "
-        "a blank screen and says nothing.",
-    ),
-    (
         "Phoenix_Tool/Texgen_tool.cpp",
         """        TS32 id = x;
         n.GetAttributeAsInteger( _T( "splineid" ), &id );
@@ -1263,23 +1216,6 @@ private:""",
         SAFEDELETE( Curves[ id ] );""",
         "a splineid outside Curves[4] indexed past the array and ran SAFEDELETE on "
         "whatever followed it.",
-    ),
-    (
-        "Phoenix/Timeline.cpp",
-        """    D3D11_VIEWPORT v = { ( ScreenX - Target->XRes ) / 2.0f, ( ScreenY - Target->YRes ) / 2.0f, (float)Target->XRes, (float)Target->YRes, 0, 1 };""",
-        """    // [port] Fill the window keeping the frame's aspect ratio, and centre it on
-    // both axes.  The release blits at the target's native size, which is exact
-    // on a 1280x720 window and leaves a black border everywhere else -- and an
-    // uneven one, because the offset centres the TARGET rather than the scaled
-    // image.  When the window already matches the target, scale is 1 and this
-    // reduces to the original values, so reference frames are unaffected.
-    float blitScale = ScreenX / (float)Target->XRes;
-    const float blitScaleY = ScreenY / (float)Target->YRes;
-    if ( blitScaleY < blitScale ) blitScale = blitScaleY;
-    const float blitW = Target->XRes * blitScale, blitH = Target->YRes * blitScale;
-    D3D11_VIEWPORT v = { ( ScreenX - blitW ) / 2.0f, ( ScreenY - blitH ) / 2.0f, blitW, blitH, 0, 1 };\n    { static int n = 0; if ( n++ < 3 ) { printf( "[blit] window %dx%d, target %dx%d -> viewport %.1f,%.1f %.1fx%.1f\\n", (int)ScreenX, (int)ScreenY, (int)Target->XRes, (int)Target->YRes, v.TopLeftX, v.TopLeftY, v.Width, v.Height ); fflush( stdout ); } }""",
-        "the final blit drew the frame at its native size, so any window that is "
-        "not exactly the project's resolution gets uneven black borders.",
     ),
     (
         "Phoenix_Tool/Scene_tool.cpp",
@@ -1369,6 +1305,75 @@ private:""",
         "particles were never stepped when they lived in a sub-scene, and the step came from the wall clock, which is wrong for a fixed-step render.",
     ),
     (
+        "Phoenix/Timeline.cpp",
+        """    //render here
+    phxContext->Draw( 6, 0 );""",
+        """    // [port] diagnostic: a shader-toy pass with nowhere to draw, or with no
+    // pixel shader, renders nothing and says nothing about it.  The loading
+    // screen is exactly this path, and it came out blank without a single log
+    // line pointing at it, so report the first few passes' state -- including
+    // the four floats that become cbuffer b0, whose XRes/YRes entries are only
+    // written when Target is non-null.
+    {
+      static int reportedShadertoy = 0;
+      if ( reportedShadertoy < 8 )
+      {
+        reportedShadertoy++;
+        // No logging macro reaches this translation unit, so write it directly.
+        fprintf( stderr, "[shadertoy] pass %d of %d: rendertarget %p, ps %p, target %p, b0 = %.4f %.4f %.4f %.4f\\n",
+                (int)x, (int)Tech->PassCount, (void*)MaterialState[ x ]->RenderTarget,
+                (void*)Tech->RenderPasses[ x ]->PS, (void*)Target,
+                ShaderData[ 0 ], ShaderData[ 1 ], ShaderData[ 2 ], ShaderData[ 3 ] );
+        fflush( stderr );
+      }
+    }
+
+    //render here (after the [shadertoy] diagnostic above)
+    phxContext->Draw( 6, 0 );""",
+        "a shader-toy pass with no render target renders nothing silently; this is the loading-screen path.",
+    ),
+    (
+        "Phoenix/Timeline.cpp",
+        """    //display frame
+    Prepare2dRender();""",
+        """    // [port] diagnostic: the shader-toy pass above draws into
+    // MaterialState[x]'s render target, and this blit reads the EVENT's Target.
+    // When those are two different objects the pass renders into an image
+    // nobody looks at and the screen stays blank with nothing in the log to say
+    // so.
+    {
+      static int reportedBlit = 0;
+      if ( reportedBlit < 8 )
+      {
+        reportedBlit++;
+        fprintf( stderr, "[blit] event target %p view %p %dx%d\\n", (void*)Target, (void*)Target->View,
+                (int)Target->XRes, (int)Target->YRes );
+        fflush( stderr );
+      }
+    }
+
+    //display frame (after the [blit] diagnostic above)
+    Prepare2dRender();""",
+        "a blit that reads a different render target than the pass drew into leaves a blank screen and says nothing.",
+    ),
+    (
+        "Phoenix/Timeline.cpp",
+        """    D3D11_VIEWPORT v = { ( ScreenX - Target->XRes ) / 2.0f, ( ScreenY - Target->YRes ) / 2.0f, (float)Target->XRes, (float)Target->YRes, 0, 1 };""",
+        """    // [port] Fill the window keeping the frame's aspect ratio, and centre it on
+    // both axes.  The release blits at the target's native size, which is exact
+    // on a 1280x720 window and leaves a black border everywhere else -- and an
+    // uneven one, because the offset centres the TARGET rather than the scaled
+    // image.  When the window already matches the target, scale is 1 and this
+    // reduces to the original values, so reference frames are unaffected.
+    float blitScale = ScreenX / (float)Target->XRes;
+    const float blitScaleY = ScreenY / (float)Target->YRes;
+    if ( blitScaleY < blitScale ) blitScale = blitScaleY;
+    const float blitW = Target->XRes * blitScale, blitH = Target->YRes * blitScale;
+    D3D11_VIEWPORT v = { ( ScreenX - blitW ) / 2.0f, ( ScreenY - blitH ) / 2.0f, blitW, blitH, 0, 1 };
+    { static int n = 0; if ( n++ < 3 ) { fprintf( stderr, "[blit] window %dx%d, target %dx%d -> viewport %.1f,%.1f %.1fx%.1f\\n", (int)ScreenX, (int)ScreenY, (int)Target->XRes, (int)Target->YRes, v.TopLeftX, v.TopLeftY, v.Width, v.Height ); fflush( stderr ); } }""",
+        "the final blit drew the frame at its native size, so any window that is not exactly the project's resolution gets uneven black borders.",
+    ),
+    (
         "Phoenix/Scene.cpp",
         """void CphxObject_ParticleEmitter_CPU::CreateRenderDataInstances( int Clip, const D3DXMATRIX &m, CphxScene *RootScene, void *SubSceneData )
 {
@@ -1387,17 +1392,18 @@ private:""",
     calls++;
     // first few, and then every 500th call so a short run shows the counter move
     if ( reported < 8 ? ( Particles[ 0 ].LifeLeft > 0 || SplineResults[ Spline_Particle_EmissionPerSecond ] > 0 )
-                      : ( calls % 2000 ) == 0 )
+                      : ( calls % 200 ) == 0 )
     {
       reported++;
       const int slots = 1 << BufferSize;
       int alive = 0;
       for ( int y = 0; y < slots; y++ )
         if ( Particles[ y ].LifeLeft > 0 ) alive++;
-      printf( "[particles] buffersize %d = %d slots, %d alive, LiveCount %d, Ticks %.3f, emit-scene %d, emit-mesh %d, emit/s %.4f, aging %d, spawns %lld\\n",
-              (int)BufferSize, slots, alive, (int)LiveCount, Ticks, SceneToEmit ? 1 : 0, ObjectToEmit ? 1 : 0,
-              SplineResults[ Spline_Particle_EmissionPerSecond ], Aging ? 1 : 0, g_particleSpawns );
-      fflush( stdout );
+      fprintf( stderr, "[particles] frame %d buffersize %d = %d slots, %d alive, LiveCount %d, Ticks %.3f, emit-scene %d, emit-mesh %d, emit/s %.4f, life %.3f, lifechaos %.3f, aging %d, spawns %lld\\n",
+              CurrentFrame, (int)BufferSize, slots, alive, (int)LiveCount, Ticks, SceneToEmit ? 1 : 0, ObjectToEmit ? 1 : 0,
+              SplineResults[ Spline_Particle_EmissionPerSecond ], SplineResults[ Spline_Particle_Life ],
+              SplineResults[ Spline_Particle_LifeChaos ], Aging ? 1 : 0, g_particleSpawns );
+      fflush( stderr );
     }
   }
 

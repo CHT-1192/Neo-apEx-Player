@@ -4,6 +4,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
+#include <cmath>
 #include <cstring>
 #include <mutex>
 
@@ -773,7 +774,7 @@ VkImage CreateImage2D(uint32_t w, uint32_t h, VkFormat format, VkImageUsageFlags
   ci.imageType = VK_IMAGE_TYPE_2D;
   ci.format = format;
   ci.extent = {w ? w : 1, h ? h : 1, 1};
-  ci.mipLevels = mipmaps ? (uint32_t)floor(log2((double)(w > h ? w : h))) + 1 : 1;
+  ci.mipLevels = mipmaps ? (uint32_t)std::floor(std::log2((double)(w > h ? w : h))) + 1 : 1;
   ci.arrayLayers = 1;
   ci.samples = VK_SAMPLE_COUNT_1_BIT;
   ci.tiling = VK_IMAGE_TILING_OPTIMAL;

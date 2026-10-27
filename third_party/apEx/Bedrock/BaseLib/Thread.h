@@ -1,5 +1,5 @@
 #pragma once
-#include <Thread>
+#include <thread>   // [port] MSVC resolved <Thread> case-insensitively to this
 
 class CThread
 {

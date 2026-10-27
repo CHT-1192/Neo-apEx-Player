@@ -26,6 +26,7 @@ add_library(apex_engine STATIC
 
 target_include_directories(apex_engine PUBLIC
   ${APEX_COMPAT_INCLUDE}          # must come first: it shadows <Windows.h> etc.
+  ${APEX_COMPAT_LOWERCASE}        # ...and lower-case spellings of the same names
   ${CMAKE_CURRENT_SOURCE_DIR}/src
   ${CMAKE_CURRENT_SOURCE_DIR}/third_party/apEx/Bedrock/UtilLib
   ${CMAKE_CURRENT_SOURCE_DIR}/third_party/apEx/Bedrock/UtilLib/RapidXML
@@ -80,6 +81,7 @@ target_include_directories(phx_imgui SYSTEM PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui
   ${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui/backends
   ${APEX_COMPAT_INCLUDE}
+  ${APEX_COMPAT_LOWERCASE}
   ${SDL3_INCLUDE_DIRS}
 )
 # imgui_impl_dx11 includes <d3d11.h>, which compat/ shadows with the subset this
