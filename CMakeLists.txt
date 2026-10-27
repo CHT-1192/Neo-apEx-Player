@@ -28,6 +28,13 @@ pkg_check_modules(SDL3 REQUIRED sdl3)
 #   -fms-extensions             __int64, __declspec, forward-declared enums, ...
 #   -fdelayed-template-parsing  MSVC-style two-phase lookup in BaseLib templates
 add_library(apex_compat_flags INTERFACE)
+
+# The standard headers must be parsed before compat/Windows.h defines min/max as
+# macros: libstdc++ uses those names unqualified inside its own headers and the
+# macros turn its definitions into syntax errors.  See the header for the full
+# explanation.
+target_compile_options(apex_compat_flags INTERFACE
+  "-include" "${CMAKE_CURRENT_SOURCE_DIR}/compat/std_before_windows.h")
 target_compile_options(apex_compat_flags INTERFACE
   -fms-extensions
   -fdelayed-template-parsing
