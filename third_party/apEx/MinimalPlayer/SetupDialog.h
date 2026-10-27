@@ -4,7 +4,7 @@
 #ifdef PHX_MINIMAL_BUILD
 #include "..\Phoenix\PhoenixConfig.h"
 #else
-#include "..\Phoenix\PhoenixConfig_Full.h"
+#include "..\Phoenix\PhoenixConfig_full.h"
 #endif
 
 typedef struct

@@ -6,7 +6,7 @@
 #ifdef PHX_MINIMAL_BUILD
 #include "PhoenixConfig.h"
 #else
-#include "PhoenixConfig_Full.h"
+#include "PhoenixConfig_full.h"
 #endif
 
 enum PHXEVENTTYPE

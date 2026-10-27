@@ -4,7 +4,7 @@
 
 TBOOL CStackTracker::DbgInitialized = false;
 
-#include <DbgHelp.h>
+#include <dbghelp.h>
 #pragma comment(lib,"dbghelp.lib")
 
 CStackTracker::CStackTracker( TS8 Offset )

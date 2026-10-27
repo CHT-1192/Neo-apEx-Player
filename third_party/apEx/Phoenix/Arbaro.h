@@ -5,7 +5,7 @@
 #ifdef PHX_MINIMAL_BUILD
 #include "PhoenixConfig.h"
 #else
-#include "PhoenixConfig_Full.h"
+#include "PhoenixConfig_full.h"
 #endif
 
 #if defined PHX_MESH_CREATETREE || defined PHX_MESH_CREATETREELEAVES

@@ -2,7 +2,7 @@
 #include "phxSongV2M.h"
 
 #define V2MPLAYER_SYNC_FUNCTIONS
-#include "../../libraries/v2/v2mPlayer.cpp"
+#include "../../libraries/v2/v2mplayer.cpp"
 
 #pragma comment(lib,"../libraries/v2/libv2.lib")
 
@@ -22,7 +22,7 @@ void CphxSongV2M::OfflineRenderSong( CStreamReader & streamSong, CStreamWriter &
   unsigned int posCount = v2mPlayer->CalcPositions( &positions );
 
   /*
-  // "CalcPositions is kinda deprecated and won’t work" /kb/
+  // "CalcPositions is kinda deprecated and wonï¿½t work" /kb/
   aMarkers.Flush();
   for ( unsigned int i = 0; i < posCount; i++ )
   {

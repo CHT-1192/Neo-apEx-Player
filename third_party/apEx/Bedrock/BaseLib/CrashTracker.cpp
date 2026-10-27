@@ -1,5 +1,5 @@
 #include "BaseLib.h"
-#include <DbgHelp.h>
+#include <dbghelp.h>
 #include <time.h>
 
 CString BuildVersion;

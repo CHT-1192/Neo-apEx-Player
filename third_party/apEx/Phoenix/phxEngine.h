@@ -3,7 +3,7 @@
 #ifdef PHX_MINIMAL_BUILD
 #include "PhoenixConfig.h"
 #else
-#include "PhoenixConfig_Full.h"
+#include "PhoenixConfig_full.h"
 #endif
 
 #include <d3d11.h>

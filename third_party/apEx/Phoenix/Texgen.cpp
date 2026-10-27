@@ -347,7 +347,7 @@ CphxTexturePoolTexture * PHXTEXTUREFILTER::GetLookupTexture( unsigned char Res, 
 
 #ifdef PHX_TEXGEN_IMAGE
 #include <olectl.h>
-#include <Shlwapi.h>
+#include <shlwapi.h>
 
 void PHXTEXTUREFILTER::LoadMetafile( unsigned char *Output, int XRes, int YRes, void *ImageData, int ImageSize )
 {

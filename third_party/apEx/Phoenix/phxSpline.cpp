@@ -7,7 +7,7 @@
 #ifdef PHX_MINIMAL_BUILD
 #include "PhoenixConfig.h"
 #else
-#include "PhoenixConfig_Full.h"
+#include "PhoenixConfig_full.h"
 #endif
 //d3dx10 needed for half-math
 //#pragma comment(lib,"d3dx10.lib")

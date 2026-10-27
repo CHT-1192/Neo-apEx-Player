@@ -109,6 +109,9 @@ jobs:
 
       - name: Show the toolchain
         run: |
+          rem clang-cl, not cl: the same ABI and the same headers, a different
+          rem front end.  The libraries are MSVC-built and link either way.
+          clang-cl --version
           cl 2>&1 | findstr /C:"Version"
           dumpbin /headers third_party\apEx\Libraries\MVX\mvxPlayerLib_vs2019_releasestatic.lib 2>&1 | findstr /C:"machine" | findstr /C:"14C" && echo "library is i386 as expected"
 
@@ -123,7 +126,7 @@ jobs:
           rem __except_handler4_common from msvcrt.dll, so linking it against the
           rem default UCRT fails with LNK2019.  Select the legacy import library
           rem explicitly (msvcrt.lib) and drop libucrt from the default set.
-          cl /nologo /EHsc /O2 /W3 ^
+          clang-cl /nologo /EHsc /O2 /W3 ^
              /I third_party\apEx\Libraries\MVX ^
              tools\mvx_render.cpp ^
              third_party\apEx\Libraries\MVX\mvxPlayerLib_vs2019_releasestatic.lib ^
