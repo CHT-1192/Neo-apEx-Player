@@ -50,7 +50,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential cmake pkg-config curl ca-certificates \
+            build-essential clang cmake pkg-config curl ca-certificates \
             libvulkan-dev libshaderc-dev libvulkan1 mesa-vulkan-drivers \
             libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev \
             libxss-dev libxtst-dev libxkbcommon-dev libasound2-dev libwayland-dev
@@ -79,7 +79,12 @@ jobs:
           set -euo pipefail
           export PKG_CONFIG_PATH="$SDL3_PREFIX/lib/pkgconfig:$SDL3_PREFIX/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"
           pkg-config --modversion sdl3 vulkan shaderc
-          cmake -S . -B build -DAPEX_BUILD_PLAYER=ON -DCMAKE_BUILD_TYPE=Release
+          # clang, not the default GCC: the vendored MSVC code needs
+          # -fms-extensions and -fdelayed-template-parsing, which are clang
+          # flags.  On macOS that is the only compiler, which is why Linux is
+          # the first platform to notice.
+          cmake -S . -B build -DAPEX_BUILD_PLAYER=ON -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
 
       - name: Build
         run: |
