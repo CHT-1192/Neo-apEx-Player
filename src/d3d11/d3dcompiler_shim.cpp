@@ -8,6 +8,7 @@
 
 #include "rhi/gs_emulation.h"
 
+#include <mutex>
 #include <set>
 
 #include <D3Dcompiler.h>
