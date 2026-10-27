@@ -19,13 +19,6 @@ TP = os.path.join(ROOT, "third_party", "apEx")
 # (relative path, old text, new text, note)
 PATCHES = [
     (
-        "Bedrock/BaseLib/Thread.h",
-        "#include <Thread>",
-        "#include <thread>   // [port] MSVC resolved <Thread> case-insensitively to this",
-        "MSVC's filesystem is case-insensitive, so <Thread> found the standard "
-        "<thread>; on Linux there is no such header and the build stops here.",
-    ),
-    (
         "Bedrock/BaseLib/StackTracker.h",
         "enum LOGVERBOSITY;",
         "enum LOGVERBOSITY : int;",
@@ -1409,6 +1402,62 @@ private:""",
 
   Clips[ Clip ]->MaterialSplines->ApplyToParameters( this );""",
         "the sub-scene particle path draws nothing when no particle is alive, and says nothing either.",
+    ),
+    (
+        "Bedrock/BaseLib/Thread.h",
+        """#pragma once
+#include <Thread>
+
+class CThread
+{
+public:
+
+  virtual void Start() {}
+  virtual void Run( void *This ) = 0;
+
+  CThread()
+  {
+    //std::thread 
+  }
+
+  virtual ~CThread()
+  {
+
+  }
+};""",
+        """#pragma once
+// [port] MSVC resolved <Thread> case-insensitively to the standard <thread>,
+// and on that platform the min/max macros from <windows.h> are tolerated by the
+// standard library.  libstdc++ is not so forgiving: <thread> pulls in <chrono>,
+// which calls std::min/std::max, and the macros turn those into syntax errors.
+// Hide them for the duration of the include only -- 334 places in the vendored
+// engine still want them as macros.
+#pragma push_macro("min")
+#pragma push_macro("max")
+#undef min
+#undef max
+#include <thread>
+#pragma pop_macro("max")
+#pragma pop_macro("min")
+
+class CThread
+{
+public:
+
+  virtual void Start() {}
+  virtual void Run( void *This ) = 0;
+
+  CThread()
+  {
+    //std::thread 
+  }
+
+  virtual ~CThread()
+  {
+
+  }
+};""",
+        "MSVC's filesystem is case-insensitive, so <Thread> found the standard <thread>; on Linux there is no such header.  Including the real one then collides with the min/max macros, which libstdc++ uses unqualified inside <chrono>, so they are hidden around the include.",
     ),
 ]
 
