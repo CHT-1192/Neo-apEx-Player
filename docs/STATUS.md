@@ -1112,23 +1112,14 @@ because "needs investigation" is how a list like this rots.
    *Closing it:* one full playthrough at 320x180 (~4 min), comparing port and
    reference frame by frame across the particle section.
 
-2. **The port runs about 0.25 s early on scene changes** (first noticed at ~55 s,
-   where it cuts before the reference does).  Not measured precisely yet, and the
-   reference cannot measure it to better than 16.7 ms: the release video is
-   60.008 fps against a 120 fps demo, so half of any demo-frame pairing is a
-   duplicated frame.
-   *Closing it:* window alignment on the 60 fps grid -- two seconds of frames
-   from each side, slid against each other, and the offset falls out; then find
-   whether the clock or the event `t` mapping is responsible.
-
-3. **Only Clean Slate has frame-level evidence.**  The other seven bundled
+2. **Only Clean Slate has frame-level evidence.**  The other seven bundled
    projects are known to import and render (the hostile-case corpus and the `.mvm`
    runs both touch them), but none has been compared against its own original
    video.  The README's "load and render" means exactly that and nothing more.
    *Closing it:* the same low-resolution dump-and-compare loop, one project at a
    time.  This is the largest gap between what is claimed and what is measured.
 
-4. **Geometry shader coverage has three known holes**, all in
+3. **Geometry shader coverage has three known holes**, all in
    `src/rhi/gs_emulation.cpp`: the fat vertex is a vertex buffer, so a shader
    emitting more than six vertices per primitive is refused; the analysis runs on
    the source rather than the preprocessed shader, so an `Append` hidden behind a
@@ -1137,21 +1128,29 @@ because "needs investigation" is how a list like this rots.
    *Closing it:* storage-buffer fat vertex, preprocess before analysing, count
    appends per control-flow path.
 
-5. **No build has been attempted on Windows or Linux.**  Windows would need
+4. **No build has been attempted on Windows or Linux.**  Windows would need
    `compat/` disabled (the real SDK headers are the point there); Linux needs the
    case-sensitivity shim and a decision about the GDI subset.
    *Closing it:* a CI matrix job that configures and runs `phx_smoke`.
 
-6. **Five of the ten shipped songs cannot be loaded by the closed-source synth**
+5. **Five of the ten shipped songs cannot be loaded by the closed-source synth**
    (table above).  Not fixable here: the release has `mvx.h` and the x86-32
    library, no implementation.  Recorded so nobody re-derives it.
 
-7. **`--fixed-fps` still cannot hold 120 fps** at the resolutions tested, so it
+6. **`--fixed-fps` still cannot hold 120 fps** at the resolutions tested, so it
    remains an offline rendering mode rather than a playback mode.  Two frames in
    flight took a 320x180 frame from 17.99 ms to 9.61 ms against an 8.33 ms budget
    -- close, not met at 720p.
 
 Fixed since this list was first written:
+
+* **The "0.25 s early" scene-change offset was a sampling artefact.**  Window
+  alignment over 60 frames at 30 s, and again at 55 s, puts the port within
+  **+17 to +33 ms** of the reference, and the correlation peak is flat across
+  +/-2 frames because the release video resolves only 16.7 ms.  Two independent
+  windows agree.  The original reading came from comparing single frames on a
+  60 fps video, where adjacent demo frames are very often the same video frame --
+  which is the trap recorded further up this file.
 
 * **The frames 14990-15010 crash no longer reproduces.**  It was
   `CphxMaterialSpline::CalculateValue` walking a freed spline, and two full-length
