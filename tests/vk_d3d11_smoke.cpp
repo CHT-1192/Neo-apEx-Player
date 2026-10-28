@@ -1381,7 +1381,10 @@ bool CaseGeomEmulationWide()
   // makes this draw land on nothing: clearing here makes the case independent.
   // (Reported in STATUS -- it is a leak in the shim's state handling, not
   // something a test should have to work around.)
-  g_context->ClearState();
+  // Viewport and scissor are context state and survive a frame (see
+  // SetFullViewport), so this sets both rather than only the viewport: case 7
+  // leaves a 64x64 scissor behind, and the centre pixel this case checks is
+  // outside it.
 
   ID3DBlob *vsBlob = nullptr, *gsBlob = nullptr, *psBlob = nullptr;
   ID3D11VertexShader *vs = nullptr;
@@ -1454,8 +1457,7 @@ bool CaseGeomEmulationWide()
     const float green[4] = {0.0f, 1.0f, 0.0f, 1.0f};
     g_context->ClearRenderTargetView(rt.rtv, clear);
     g_context->OMSetRenderTargets(1, &rt.rtv, nullptr);
-    D3D11_VIEWPORT vp = {0, 0, 256, 256, 0, 1};
-    g_context->RSSetViewports(1, &vp);
+    SetFullViewport(256);
     g_context->RSSetState(rs);
     UINT stride = sizeof(verts[0]), offset = 0;
     g_context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
@@ -1523,7 +1525,6 @@ bool CaseGeomEmulationWiderThanTheDevice()
 {
   g_currentCase = "geometry shader emulation, 33 locations (more than the device allows)";
   printf("\n=== 9. %s ===\n", g_currentCase);
-  g_context->ClearState();
 
   ID3DBlob *vsBlob = nullptr, *gsBlob = nullptr, *psBlob = nullptr;
   ID3D11VertexShader *vs = nullptr;
@@ -1591,8 +1592,7 @@ bool CaseGeomEmulationWiderThanTheDevice()
     const float clear[4] = {0.0f, 0.0f, 0.0f, 1.0f};
     g_context->ClearRenderTargetView(rt.rtv, clear);
     g_context->OMSetRenderTargets(1, &rt.rtv, nullptr);
-    D3D11_VIEWPORT vp = {0, 0, 256, 256, 0, 1};
-    g_context->RSSetViewports(1, &vp);
+    SetFullViewport(256);
     g_context->RSSetState(rs);
     UINT stride = (UINT)(sizeof(float) * floatsPerVertex), offset = 0;
     g_context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);

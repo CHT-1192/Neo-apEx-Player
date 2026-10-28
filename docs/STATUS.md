@@ -1202,19 +1202,25 @@ Fixed since this list was first written:
 * **The MVX synth is still Windows-only** but no longer a manual one-off:
   `MVX (Windows)` has a matrix over every shipped `.mvm`.
 
-## A state leak the new smoke case found
+## The "state leak" that was not one
 
-`phx_smoke` grew an eighth case: a geometry-shader emulation draw with a wide
-input layout (8 attributes, three input vertices, 24 attribute locations).  It
-renders correctly run alone and renders **nothing** when it runs after the
-GenerateMips case, until `ClearState()` is called first -- two draws into the same
-context, the second silently empty.
+Writing the wide-input smoke case turned up what looked like a shim bug: the case
+rendered correctly alone and rendered nothing when it ran after the GenerateMips
+case, with the draw still logged and `renderingActive`, the render-target count
+and the pipeline handle all identical between the two runs.  `ClearState()` fixed
+it, which made it look like state was surviving where it should not.
 
-That is a state-handling leak, not a test artefact, and it is recorded here
-because the test works around it rather than fixing it: something the mip
-generation case leaves behind survives a `OMSetRenderTargets` + viewport + full
-state set and swallows a later draw.  Worth chasing with the same method that
-found it.
+It was **the test**: viewport and scissor are D3D11 context state and persist
+across draws, case 7 leaves a 64x64 scissor behind, and the new case set only the
+viewport -- so its centre pixel fell outside the inherited scissor and came back
+black.  The file had documented exactly this two hundred lines above, in the
+comment on `SetFullViewport()`: "every case sets both: case 2 narrows the scissor
+to one 64px strip, and without this the cases after it would inherit that
+rectangle."
+
+Recorded because the first version of this note claimed the shim was leaking
+state, and the probe that would have shown it (a scissor of 64x64) took ten
+minutes once it was actually looked at.
 
 ## Verified details worth not re-deriving
 
