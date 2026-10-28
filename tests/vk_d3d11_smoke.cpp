@@ -1346,6 +1346,154 @@ bool CaseTypelessDepthSrv()
 //////////////////////////////////////////////////////////////////////////////
 // 7 - R8: GenerateMips on a MipLevels=0 render target
 
+// The emulated geometry shader path with an input layout wide enough that the
+// fat vertex cannot fit in vertex attributes: 8 locations per input vertex and
+// three input vertices is 24, against the 16 a device has.  This is the
+// render-level check the storage-buffer work needs -- before that work it shows
+// what the limit costs, which is the whole draw.
+static const char *kGSWide = R"HLSL(
+struct VSIN  { float4 a0 : POSITION0; float4 a1 : POSITION1; float4 a2 : POSITION2; float4 a3 : POSITION3;
+               float4 a4 : POSITION4; float4 a5 : POSITION5; float4 a6 : POSITION6; float4 a7 : POSITION7; };
+struct VSOUT { float4 Position : SV_POSITION; };
+// Every attribute is READ, so none of them can be filtered away as unused: that
+// is what forces the fat vertex to need 24 locations rather than 3.
+VSOUT v( VSIN x )
+{
+  VSOUT o;
+  o.Position = x.a0 + ( x.a1 + x.a2 + x.a3 + x.a4 + x.a5 + x.a6 + x.a7 ) * 1.0e-6;
+  return o;
+}
+[maxvertexcount(3)]
+void g( triangle VSOUT input[3], inout TriangleStream<VSOUT> os )
+{
+  os.Append( input[0] );
+  os.Append( input[1] );
+  os.Append( input[2] );
+}
+float4 p( VSOUT i ) : SV_TARGET { return float4( 0, 1, 0, 1 ); }
+)HLSL";
+
+bool CaseGeomEmulationWide()
+{
+  g_currentCase = "geometry shader emulation, wide input layout (24 locations)";
+  printf("\n=== 8. %s ===\n", g_currentCase);
+  // Runs after the GenerateMips case, which leaves the context in a state that
+  // makes this draw land on nothing: clearing here makes the case independent.
+  // (Reported in STATUS -- it is a leak in the shim's state handling, not
+  // something a test should have to work around.)
+  g_context->ClearState();
+
+  ID3DBlob *vsBlob = nullptr, *gsBlob = nullptr, *psBlob = nullptr;
+  ID3D11VertexShader *vs = nullptr;
+  ID3D11GeometryShader *gs = nullptr;
+  ID3D11PixelShader *ps = nullptr;
+  ID3D11InputLayout *layout = nullptr;
+  ID3D11Buffer *vb = nullptr;
+  Target rt;
+  ID3D11RasterizerState *rs = nullptr;
+
+  bool ok = [&]() -> bool
+  {
+    if (!CompileShader(kGSWide, "v", "vs_5_0", &vsBlob, "gswide.hlsl")) return false;
+    if (!CompileShader(kGSWide, "g", "gs_5_0", &gsBlob, "gswide.hlsl")) return false;
+    if (!CompileShader(kGSWide, "p", "ps_5_0", &psBlob, "gswide.hlsl")) return false;
+
+    if (FAILED(g_device->CreateVertexShader(vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), nullptr, &vs))) return false;
+    if (FAILED(g_device->CreateGeometryShader(gsBlob->GetBufferPointer(), gsBlob->GetBufferSize(), nullptr, &gs)))
+    {
+      // No geometry stage on this device: the emulation has to do it, which is
+      // the path this case is about.
+      printf("  note: CreateGeometryShader failed, the emulator is expected to handle it\n");
+      return false;
+    }
+    if (FAILED(g_device->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(), nullptr, &ps))) return false;
+
+    D3D11_INPUT_ELEMENT_DESC decl[8];
+    const char *semantics[8] = {"POSITION", "POSITION", "POSITION", "POSITION",
+                                "POSITION", "POSITION", "POSITION", "POSITION"};
+    for (int i = 0; i < 8; i++)
+    {
+      decl[i].SemanticName = semantics[i];
+      decl[i].SemanticIndex = (UINT)i;
+      decl[i].Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+      decl[i].InputSlot = 0;
+      decl[i].AlignedByteOffset = (UINT)(i * 16);
+      decl[i].InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA;
+      decl[i].InstanceDataStepRate = 0;
+    }
+    if (FAILED(g_device->CreateInputLayout(decl, 8, vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), &layout))) return false;
+
+    // One triangle covering the target; the eighth attribute is unused by the
+    // shader, which is the point -- it is there to make the layout wide.
+    float verts[3][32];
+    memset(verts, 0, sizeof(verts));
+    const float pos[3][2] = {{-1.0f, -1.0f}, {3.0f, -1.0f}, {-1.0f, 3.0f}};
+    for (int i = 0; i < 3; i++)
+    {
+      verts[i][0] = pos[i][0];
+      verts[i][1] = pos[i][1];
+      verts[i][2] = 0.0f;
+      verts[i][3] = 1.0f;
+      for (int a = 1; a < 8; a++) verts[i][a * 4 + 0] = 1.0f;
+    }
+    D3D11_BUFFER_DESC bd;
+    memset(&bd, 0, sizeof(bd));
+    bd.ByteWidth = sizeof(verts);
+    bd.Usage = D3D11_USAGE_IMMUTABLE;
+    bd.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+    D3D11_SUBRESOURCE_DATA sd;
+    memset(&sd, 0, sizeof(sd));
+    sd.pSysMem = verts;
+    if (FAILED(g_device->CreateBuffer(&bd, &sd, &vb)) || !vb) { Fail("CreateBuffer(vertex) failed"); return false; }
+
+    if (!MakeTarget(256, 256, DXGI_FORMAT_R8G8B8A8_UNORM, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE, 0, 1, rt)) return false;
+    rs = MakeRasterizerState();
+    if (!rs) return false;
+
+    const float clear[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+    const float green[4] = {0.0f, 1.0f, 0.0f, 1.0f};
+    g_context->ClearRenderTargetView(rt.rtv, clear);
+    g_context->OMSetRenderTargets(1, &rt.rtv, nullptr);
+    D3D11_VIEWPORT vp = {0, 0, 256, 256, 0, 1};
+    g_context->RSSetViewports(1, &vp);
+    g_context->RSSetState(rs);
+    UINT stride = sizeof(verts[0]), offset = 0;
+    g_context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
+    g_context->IASetInputLayout(layout);
+    g_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    g_context->VSSetShader(vs, nullptr, 0);
+    g_context->GSSetShader(gs, nullptr, 0);
+    g_context->PSSetShader(ps, nullptr, 0);
+    g_context->Draw(3, 0);
+
+    Readback rb;
+    if (!ReadTexture(rt.tex, 0, 256, 256, DXGI_FORMAT_R8G8B8A8_UNORM, rb)) return false;
+    const uint8_t *p = rb.Texel(128, 128);
+    const bool greenPixel = p[1] > 200 && p[0] < 60 && p[2] < 60;
+    if (!greenPixel)
+      Fail("the wide-layout geometry draw did not reach the target: got R=%d G=%d B=%d.  If the "
+           "emulator refused the shape for its attribute count, this is the limit the storage-buffer "
+           "work removes.", p[0], p[1], p[2]);
+    else
+      printf("  wide input layout rendered: R=%d G=%d B=%d (device allows %u vertex attributes, "
+             "the fat vertex needs %d)\n", p[0], p[1], p[2],
+             phxvk::Vk().props.limits.maxVertexInputAttributes, 3 * 8);
+    if (greenPixel) Passed();
+    return greenPixel;
+  }();
+
+  if (ps) ps->Release();
+  if (gs) gs->Release();
+  if (vs) vs->Release();
+  if (layout) layout->Release();
+  if (vb) vb->Release();
+  if (rs) rs->Release();
+  if (psBlob) psBlob->Release();
+  if (gsBlob) gsBlob->Release();
+  if (vsBlob) vsBlob->Release();
+  return ok;
+}
+
 bool CaseGenerateMips()
 {
   g_currentCase = "GenerateMips on a MipLevels=0 MISC_GENERATE_MIPS RT (R8)";
@@ -1479,7 +1627,7 @@ int main(int argc, char **argv)
 
   const bool validation = argc > 1 && !strcmp(argv[1], "--validation");
   // --case=N runs a single case, which is what makes a flaky case debuggable.
-  bool runCase[8] = {false, true, true, true, true, true, true, true};
+  bool runCase[9] = {false, true, true, true, true, true, true, true, true};
   bool filtered = false;
   for (int i = 1; i < argc; i++)
   {
@@ -1487,14 +1635,14 @@ int main(int argc, char **argv)
     {
       if (!filtered)
       {
-        for (int c = 0; c < 8; c++) runCase[c] = false;
+        for (int c = 0; c < 9; c++) runCase[c] = false;
         filtered = true;
       }
       const char *list = argv[i] + 7;
       while (*list)
       {
         const int n = atoi(list);
-        if (n >= 1 && n <= 7) runCase[n] = true;
+        if (n >= 1 && n <= 8) runCase[n] = true;
         while (*list && *list != ',') list++;
         if (*list == ',') list++;
       }
@@ -1520,6 +1668,7 @@ int main(int argc, char **argv)
   const CaseEntry cases[] = {
       {1, CaseQuad},        {2, CaseCbufferAndRenaming}, {3, CaseStrippedInput}, {4, CaseMrt},
       {5, CaseDepth},       {6, CaseTypelessDepthSrv},   {7, CaseGenerateMips},
+      {8, CaseGeomEmulationWide},
   };
   for (auto &c : cases)
     if (runCase[c.index]) c.run();

@@ -1206,6 +1206,20 @@ Fixed since this list was first written:
 * **The MVX synth is still Windows-only** but no longer a manual one-off:
   `MVX (Windows)` has a matrix over every shipped `.mvm`.
 
+## A state leak the new smoke case found
+
+`phx_smoke` grew an eighth case: a geometry-shader emulation draw with a wide
+input layout (8 attributes, three input vertices, 24 attribute locations).  It
+renders correctly run alone and renders **nothing** when it runs after the
+GenerateMips case, until `ClearState()` is called first -- two draws into the same
+context, the second silently empty.
+
+That is a state-handling leak, not a test artefact, and it is recorded here
+because the test works around it rather than fixing it: something the mip
+generation case leaves behind survives a `OMSetRenderTargets` + viewport + full
+state set and swallows a later draw.  Worth chasing with the same method that
+found it.
+
 ## Verified details worth not re-deriving
 
 * Shader compilation is fast: 83 filters compile in **1.2 s total** (~14 ms
