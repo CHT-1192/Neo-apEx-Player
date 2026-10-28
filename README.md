@@ -135,11 +135,11 @@ macOS is the target platform. **Linux builds and passes its tests** on GitHub's
 runners (clang, Mesa lavapipe): 40 CPU checks and 7 render cases, geometry shaders
 included, which lavapipe supports. Playing Clean Slate on Linux has *not* been
 demonstrated -- that needs a real GPU and the text path exercised end to end.
-Windows would need `compat/` disabled and the engine's own D3D11 backend; MinGW
-cannot compile the vendored code at all, because it relies on clang's
-`-fdelayed-template-parsing`.
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) explains how the port is put
-together.
+**Windows is not a target, deliberately.** The engine is native Windows software
+and the original player runs there; the only reason this project exists is that
+none of it runs on macOS or Linux. Porting the port back to Windows would be a
+second backend built to fix a problem nobody has.
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) explains how it is put together.
 
 ## Development
 

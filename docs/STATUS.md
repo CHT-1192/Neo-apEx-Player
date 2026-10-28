@@ -1148,15 +1148,20 @@ because "needs investigation" is how a list like this rots.
    *Closing it:* storage-buffer fat vertex, preprocess before analysing, count
    appends per control-flow path.
 
-4. **Windows has still never been built.**  Linux has: the `Linux` workflow
-   configures with clang, builds every target, passes 40 CPU checks and renders
-   7/7 smoke cases on Mesa's lavapipe.  Windows would need `compat/` disabled and
-   the engine's own D3D11 backend, which is a second backend rather than a flag;
-   MinGW cannot compile the vendored code at all (`-fdelayed-template-parsing` is
-   clang-only), so clang-cl is the only viable compiler there.
-   *Closing it:* that backend, then the same kind of job for it.  Note that
-   "Linux builds" is not "Clean Slate plays on Linux": no GPU has run it, and the
-   FreeType text path has only been exercised as far as compiling.
+4. **Linux builds and passes its tests; nothing has played Clean Slate on it.**
+   The `Linux` workflow configures with clang, builds every target, passes 40 CPU
+   checks and renders 7/7 smoke cases on Mesa's lavapipe (which, unlike MoltenVK,
+   does have geometry shaders).  What that is not: a demonstration that the demo
+   runs there.  No real GPU has run it, and the FreeType text backend has only
+   been exercised as far as compiling.
+   *Closing it:* run the player on a Linux machine with a GPU and compare a frame.
+
+   Windows is **not** on this list and is not a gap.  The engine is native
+   Windows software and the original player runs there; building this shim for
+   Windows would be fixing a problem nobody has.  (It would also be a second
+   backend rather than a flag: `compat/` off, the engine's own D3D11 in.  MinGW
+   cannot compile the vendored code at all -- it needs clang's
+   `-fdelayed-template-parsing` -- so clang-cl would be the only option.)
 
 5. **Five of the ten shipped songs cannot be loaded by the closed-source synth**
    (table above).  Not fixable here: the release has `mvx.h` and the x86-32
