@@ -362,6 +362,12 @@ int CubicTo(const FT_Vector *c1, const FT_Vector *c2, const FT_Vector *to, void 
 // GDI entry points
 
 extern "C" {
+extern "C" const GUID IID_IPicture = { 0x7BF80980, 0xBF32, 0x101A, { 0x8B, 0xBB, 0x00, 0xAA, 0x00, 0x30, 0x0C, 0xAB } };
+
+
+// The engine asks for this IID by name (Texgen.cpp:360), so the symbol has to
+// exist even though the picture path itself is not implemented here.
+// IID_IPicture is declared `extern const GUID` by compat/olectl.h and is the
 
 HDC WINAPI GetDC(HWND)
 {
