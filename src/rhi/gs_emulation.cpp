@@ -183,6 +183,14 @@ size_t StatementEnd(const std::string &text, size_t from, size_t end)
   return end;
 }
 
+// One of `if` / `switch`: only one arm runs, so the Appends count is the largest
+// arm rather than their sum.  Returns the position just past the construct.
+// A branch that contains a RestartStrip is left to the conservative path: the
+// strip layout would then depend on which arm runs.
+size_t ScanConditional(const std::string &text, size_t at, size_t end, CallScan &scan, int depth);
+size_t ScanSwitch(const std::string &text, size_t at, size_t end, CallScan &scan, int depth);
+bool IdentAt(const std::string &text, size_t at, const char *word, size_t end);
+
 void ScanRange(const std::string &text, size_t begin, size_t end, CallScan &scan, int depth)
 {
   if (depth > 4) { scan.unknown = true; return; }
@@ -256,6 +264,17 @@ void ScanRange(const std::string &text, size_t begin, size_t end, CallScan &scan
       }
     }
 
+    if (IdentAt(text, at, "if", end))
+    {
+      at = ScanConditional(text, at, end, scan, depth + 1);
+      continue;
+    }
+    if (IdentAt(text, at, "switch", end))
+    {
+      at = ScanSwitch(text, at, end, scan, depth + 1);
+      continue;
+    }
+
     if (text.compare(at, 6, "Append") == 0 && (at == 0 || !IsIdentChar(text[at - 1])) && (at + 6 >= text.size() || !IsIdentChar(text[at + 6])))
     {
       size_t p = at + 6;
@@ -272,6 +291,182 @@ void ScanRange(const std::string &text, size_t begin, size_t end, CallScan &scan
     }
     at++;
   }
+}
+
+
+bool IdentAt(const std::string &text, size_t at, const char *word, size_t end)
+{
+  const size_t n = strlen(word);
+  if (at + n > end) return false;
+  if (text.compare(at, n, word) != 0) return false;
+  if (at > 0 && IsIdentChar(text[at - 1])) return false;
+  if (at + n < text.size() && IsIdentChar(text[at + n])) return false;
+  return true;
+}
+
+// Position just past a '(' ... ')' group starting at `open`.
+static size_t MatchParen(const std::string &text, size_t open, size_t end)
+{
+  int d = 0;
+  for (size_t q = open; q < end; q++)
+  {
+    if (text[q] == '(') d++;
+    else if (text[q] == ')' && --d == 0) return q + 1;
+  }
+  return std::string::npos;
+}
+
+// The extent of one statement/block starting at `from`: a brace block, or a
+// single statement up to its semicolon.  `after` is one past the construct --
+// ExtractBody() would stop ON the closing brace, which makes the caller walk the
+// block a second time (that is how an if/else counted its arms twice).
+static bool StatementRange(const std::string &text, size_t from, size_t end, size_t &begin, size_t &after)
+{
+  size_t p = from;
+  SkipSpace(text, p);
+  if (p >= end) return false;
+  if (text[p] == '{')
+  {
+    int depth = 0;
+    for (size_t q = p; q < end; q++)
+    {
+      if (text[q] == '{') depth++;
+      else if (text[q] == '}' && --depth == 0) { begin = p + 1; after = q + 1; return true; }
+    }
+    return false;
+  }
+  begin = p;
+  after = StatementEnd(text, p, end);
+  return after > begin && after <= end;
+}
+
+size_t ScanConditional(const std::string &text, size_t at, size_t end, CallScan &scan, int depth)
+{
+  if (depth > 6) { scan.unknown = true; return at + 2; }
+  const size_t open = text.find('(', at);
+  if (open == std::string::npos || open >= end) return at + 2;
+  const size_t afterCond = MatchParen(text, open, end);
+  if (afterCond == std::string::npos) return at + 2;
+
+  size_t thenBegin = 0, thenAfter = 0;
+  if (!StatementRange(text, afterCond, end, thenBegin, thenAfter)) return at + 2;
+
+  CallScan thenScan, elseScan;
+  ScanRange(text, thenBegin, thenAfter, thenScan, depth + 1);
+
+  size_t next = thenAfter;
+  bool haveElse = false;
+  {
+    size_t p = next;
+    SkipSpace(text, p);
+    if (IdentAt(text, p, "else", end))
+    {
+      size_t q = p + 4;
+      SkipSpace(text, q);
+      haveElse = true;
+      if (IdentAt(text, q, "if", end))
+      {
+        next = ScanConditional(text, q, end, elseScan, depth + 1);
+      }
+      else
+      {
+        size_t begin = 0, after = 0;
+        if (StatementRange(text, q, end, begin, after))
+        {
+          ScanRange(text, begin, after, elseScan, depth + 1);
+          next = after;
+        }
+      }
+    }
+  }
+
+  const bool restarts = !thenScan.restartsAfter.empty() || !elseScan.restartsAfter.empty();
+  if (restarts)
+  {
+    // Conservative: keep both arms' counts and restarts, so a restart inside a
+    // branch is still noticed by ConditionalRestartFollowedByAppend().
+    scan.appends += thenScan.appends + elseScan.appends;
+    for (int n : thenScan.restartsAfter) scan.restartsAfter.push_back(scan.appends - elseScan.appends - thenScan.appends + n);
+    for (int n : elseScan.restartsAfter) scan.restartsAfter.push_back(scan.appends - elseScan.appends + n);
+    scan.unknown = scan.unknown || thenScan.unknown || elseScan.unknown;
+  }
+  else
+  {
+    scan.appends += thenScan.appends > elseScan.appends ? thenScan.appends : elseScan.appends;
+    scan.unknown = scan.unknown || thenScan.unknown || elseScan.unknown;
+  }
+  (void)haveElse;
+  return next;
+}
+
+// case/default labels at brace depth 0 inside the switch body.
+size_t ScanSwitch(const std::string &text, size_t at, size_t end, CallScan &scan, int depth)
+{
+  if (depth > 6) { scan.unknown = true; return at + 6; }
+  const size_t open = text.find('(', at);
+  if (open == std::string::npos || open >= end) return at + 6;
+  const size_t afterCond = MatchParen(text, open, end);
+  if (afterCond == std::string::npos) return at + 6;
+
+  std::string ignored;
+  size_t bodyBegin = 0, bodyAfter = 0;
+  if (!StatementRange(text, afterCond, end, bodyBegin, bodyAfter)) return at + 6;
+  if (bodyAfter > bodyBegin) bodyAfter--; // the label splitter wants the braces excluded
+
+  // Split into arms at labels, then take the largest suffix sum: fallthrough
+  // means an arm can run the arms after it, so the suffix is the worst case.
+  std::vector<std::pair<size_t, size_t>> arms;
+  {
+    size_t armStart = bodyBegin;
+    int brace = 0;
+    for (size_t q = bodyBegin; q < bodyAfter; q++)
+    {
+      if (text[q] == '{') brace++;
+      else if (text[q] == '}') brace--;
+      else if (brace == 0 && (IdentAt(text, q, "case", bodyAfter) || IdentAt(text, q, "default", bodyAfter)))
+      {
+        if (q > armStart) arms.push_back({armStart, q});
+        armStart = q;
+      }
+    }
+    if (armStart < bodyAfter) arms.push_back({armStart, bodyAfter});
+  }
+  if (arms.empty()) { ScanRange(text, bodyBegin, bodyAfter, scan, depth + 1); return bodyAfter; }
+
+  std::vector<CallScan> counts(arms.size());
+  std::vector<bool> falls(arms.size(), false);
+  bool anyRestart = false;
+  for (size_t i = 0; i < arms.size(); i++)
+  {
+    ScanRange(text, arms[i].first, arms[i].second, counts[i], depth + 1);
+    anyRestart = anyRestart || !counts[i].restartsAfter.empty();
+    // An arm without a `break` or `return` falls through into the next one.
+    bool exits = false;
+    for (size_t q = arms[i].first; q < arms[i].second; q++)
+      if (IdentAt(text, q, "break", arms[i].second) || IdentAt(text, q, "return", arms[i].second)) { exits = true; break; }
+    falls[i] = !exits;
+  }
+
+  if (anyRestart)
+  {
+    for (size_t i = 0; i < counts.size(); i++)
+    {
+      scan.appends += counts[i].appends;
+      scan.unknown = scan.unknown || counts[i].unknown;
+    }
+    return bodyAfter;
+  }
+
+  // Worst case from each arm: itself plus everything it can fall through into.
+  std::vector<int> worst(counts.size() + 1, 0);
+  for (size_t i = counts.size(); i-- > 0;)
+    worst[i] = counts[i].appends + (falls[i] ? worst[i + 1] : 0);
+  int best = 0;
+  for (int w : worst)
+    if (w > best) best = w;
+  scan.appends += best;
+  for (const CallScan &c : counts) scan.unknown = scan.unknown || c.unknown;
+  return bodyAfter;
 }
 
 CallScan ScanBody(const std::string &body)
@@ -481,8 +676,9 @@ GsProgram AnalyseGeometryShader(const std::string &source, const char *gsEntry, 
   }
   if (scan.appends > shape.maxVertexCount)
   {
-    gs.reason = "more Append calls than maxvertexcount allows (counted statically, so Appends in mutually "
-                "exclusive branches are added together)";
+    gs.reason = "more Append calls than maxvertexcount allows: counting the longest path through the shader "
+                "(mutually exclusive if/switch arms are counted once each, but fallthrough and loops are "
+                "counted in full)";
     return gs;
   }
 

@@ -460,6 +460,105 @@ float4 p(GSOUT v) : SV_TARGET0
 // Synthetic fixtures for the shapes Clean Slate does not happen to contain.
 // The emulator is generic over the stream a geometry shader writes and over the
 // primitive it consumes, and these are what pin that down.
+// Two arms that cannot both run: 2 Appends each, with maxvertexcount(2).  The
+// sum is 4 and the old scanner refused the shader; the longest path is 2, which
+// is legal.
+static const char *kIfElseExclusive = R"GSSRC(
+struct VSIN  { float3 Position : POSITION0; };
+struct VSOUT { float4 Position : SV_POSITION; };
+struct GSOUT { float4 Position : SV_POSITION; };
+VSOUT v(VSIN x) { VSOUT o; o.Position = float4(x.Position,1); return o; }
+[maxvertexcount(2)]
+void g( triangle VSOUT input[3], inout TriangleStream<GSOUT> OutputStream )
+{
+	GSOUT a; a.Position = input[0].Position;
+	GSOUT b; b.Position = input[1].Position;
+	if (input[0].Position.x > 0.5)
+	{
+		OutputStream.Append(a);
+		OutputStream.Append(b);
+	}
+	else
+	{
+		OutputStream.Append(b);
+		OutputStream.Append(a);
+	}
+}
+)GSSRC";
+
+// The same idea with a switch: three arms, two Appends each, maxvertexcount(2).
+static const char *kSwitchExclusive = R"GSSRC(
+struct VSIN  { float3 Position : POSITION0; };
+struct VSOUT { float4 Position : SV_POSITION; };
+struct GSOUT { float4 Position : SV_POSITION; };
+VSOUT v(VSIN x) { VSOUT o; o.Position = float4(x.Position,1); return o; }
+[maxvertexcount(2)]
+void g( triangle VSOUT input[3], inout TriangleStream<GSOUT> OutputStream )
+{
+	GSOUT a; a.Position = input[0].Position;
+	GSOUT b; b.Position = input[1].Position;
+	switch ((int)input[2].Position.x)
+	{
+		case 0: OutputStream.Append(a); OutputStream.Append(b); break;
+		case 1: OutputStream.Append(b); OutputStream.Append(a); break;
+		default: OutputStream.Append(a); OutputStream.Append(a); break;
+	}
+}
+)GSSRC";
+
+// Control: sequential Appends really do add up, and must still be refused.
+// Fallthrough: case 0 has no break, so it runs case 1's Appends too.  The worst
+// path is 1 + 2 = 3, which maxvertexcount(3) allows and maxvertexcount(2) does
+// not -- the second one is the control for this one.
+static const char *kSwitchFallthrough = R"GSSRC(
+struct VSIN  { float3 Position : POSITION0; };
+struct VSOUT { float4 Position : SV_POSITION; };
+struct GSOUT { float4 Position : SV_POSITION; };
+VSOUT v(VSIN x) { VSOUT o; o.Position = float4(x.Position,1); return o; }
+[maxvertexcount(3)]
+void g( triangle VSOUT input[3], inout TriangleStream<GSOUT> OutputStream )
+{
+	GSOUT a; a.Position = input[0].Position;
+	switch ((int)input[2].Position.x)
+	{
+		case 0: OutputStream.Append(a);
+		case 1: OutputStream.Append(a); OutputStream.Append(a); break;
+	}
+}
+)GSSRC";
+
+static const char *kSwitchFallthroughOverLimit = R"GSSRC(
+struct VSIN  { float3 Position : POSITION0; };
+struct VSOUT { float4 Position : SV_POSITION; };
+struct GSOUT { float4 Position : SV_POSITION; };
+VSOUT v(VSIN x) { VSOUT o; o.Position = float4(x.Position,1); return o; }
+[maxvertexcount(2)]
+void g( triangle VSOUT input[3], inout TriangleStream<GSOUT> OutputStream )
+{
+	GSOUT a; a.Position = input[0].Position;
+	switch ((int)input[2].Position.x)
+	{
+		case 0: OutputStream.Append(a);
+		case 1: OutputStream.Append(a); OutputStream.Append(a); break;
+	}
+}
+)GSSRC";
+
+static const char *kSequentialOverLimit = R"GSSRC(
+struct VSIN  { float3 Position : POSITION0; };
+struct VSOUT { float4 Position : SV_POSITION; };
+struct GSOUT { float4 Position : SV_POSITION; };
+VSOUT v(VSIN x) { VSOUT o; o.Position = float4(x.Position,1); return o; }
+[maxvertexcount(2)]
+void g( triangle VSOUT input[3], inout TriangleStream<GSOUT> OutputStream )
+{
+	GSOUT a; a.Position = input[0].Position;
+	OutputStream.Append(a);
+	OutputStream.Append(a);
+	OutputStream.Append(a);
+}
+)GSSRC";
+
 static const char *kPointStream = R"GSSRC(
 struct VSIN  { float3 Position : POSITION0; float3 Normal : NORMAL0; float4 UV : TEXCOORD0; };
 struct VSOUT { float4 Position : SV_POSITION; float4 Data : TEXCOORD0; };
@@ -757,6 +856,11 @@ int main()
       { "braceless conditional restart, Append after", kRestartBracelessThenAppend, false, "inside a branch" },
       { "restart after an if/else (runs unconditionally)", kRestartAfterIfElse, true, nullptr },
       { "restart in a loop whose trip count is not literal", kRestartDynamicLoop, false, "trip count" },
+      { "if/else arms are exclusive, longest path fits", kIfElseExclusive, true, nullptr },
+      { "switch arms are exclusive, longest path fits", kSwitchExclusive, true, nullptr },
+      { "sequential Appends still add up", kSequentialOverLimit, false, "maxvertexcount" },
+      { "switch fallthrough is counted in full", kSwitchFallthrough, true, nullptr },
+      { "switch fallthrough over the limit is refused", kSwitchFallthroughOverLimit, false, "maxvertexcount" },
     };
     for (const auto &c : cases)
     {
