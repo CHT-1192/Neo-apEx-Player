@@ -112,6 +112,12 @@ CompiledShader CompileHLSL(const char *source, size_t length, const char *entryP
 // Exposed for testing / tooling.
 std::string RewriteHLSLForVulkan(const std::string &hlsl);
 
+// The source after the HLSL preprocessor has run: macros expanded, includes
+// inlined.  Empty when it fails.  The geometry-shader emulator needs this
+// because it decides from the *text* whether a shader appends anything, and an
+// Append written through a #define is invisible in the unexpanded source.
+std::string PreprocessHLSL(const std::string &src, ShaderStage stage, const char *entryPoint);
+
 const char *ShaderStageName(ShaderStage stage);
 
 } // namespace phxvk

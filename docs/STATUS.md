@@ -1139,24 +1139,30 @@ because "needs investigation" is how a list like this rots.
    *Closing it:* obtain one reference per project and run the dump-and-compare
    loop that was used for Clean Slate.
 
-3. **Geometry shader coverage has two holes left**, both in
-   `src/rhi/gs_emulation.cpp`:
+3. **Geometry shader coverage has one hole left**: the fat vertex travels in
+   **vertex attributes**, so a shape needing more attribute locations than the
+   device has is refused with the numbers spelled out.  The fix is a storage
+   buffer, which has no such limit, and it is not done: the HLSL structured-buffer
+   element layout has to agree byte for byte with the CPU-side vertex layout, and
+   a mismatch would corrupt every emitted vertex without failing anything.  It
+   wants a render-level test for a wide input struct first, which this repository
+   does not have -- the only render-level check of the emulated path is a frame
+   of the demo compared byte for byte.
+   *Closing it:* that test, then the buffer.
 
-   * the fat vertex travels in **vertex attributes**, so a shape needing more
-     locations than the device has is refused with the numbers spelled out (the
-     fix is a storage buffer, which has no attribute limit);
-   * the analysis reads the **source** rather than the preprocessed shader, so an
-     `Append` written through a `#define` is invisible and the shape is refused
-     with that stated.  `shaderc_compile_into_preprocessed_text()` exists and is
-     the obvious fix; it was not taken in the same pass because it changes the
-     text the working shapes are generated from, and verifying that needs a GPU.
+   Two holes in the same file **are** closed now:
 
-   `Append` counting is no longer a hole: it now follows the longest path through
-   `if`/`else` and `switch` (through fallthrough) instead of summing mutually
-   exclusive arms, so a legal shader is no longer refused for a count it cannot
-   reach.  Five fixtures cover it, including the controls that sequential
-   Appends still add up and that fallthrough is still counted in full.
-   *Closing the rest:* storage-buffer fat vertex; preprocess before analysing.
+   * `Append` counting follows the longest path through `if`/`else` and `switch`
+     (through fallthrough) instead of summing mutually exclusive arms, so a legal
+     shader is no longer refused for a count it cannot reach;
+   * the analysis runs on the **preprocessed** source
+     (`shaderc_compile_into_preprocessed_text`), so an `Append` written through a
+     `#define` is seen instead of refused.  Both the analysis and the translated
+     stage are generated from that same text, so they cannot disagree.
+
+   Six fixtures cover them, including the controls: sequential Appends still add
+   up, fallthrough is still counted in full, and the `#define` shape is refused
+   as raw source and accepted once preprocessed.
 
 4. **Linux builds and passes its tests; nothing has played Clean Slate on it.**
    The `Linux` workflow configures with clang, builds every target, passes 40 CPU

@@ -135,18 +135,24 @@ HRESULT CompileCommon(LPCVOID pSrcData, SIZE_T SrcDataSize, const D3D_SHADER_MAC
   // ---------------------------------------------------------------------
   if (stage == phxvk::ShaderStage::Geometry && phxvk::Vk().features.geometryShader == VK_FALSE)
   {
+    // Analyse the *preprocessed* source.  The emulator decides from the text
+    // whether a shader appends anything, and an Append written through a #define
+    // is invisible before the preprocessor runs.  Everything downstream uses the
+    // same text, so the translated stage is generated from what was analysed.
+    const std::string preprocessed = phxvk::PreprocessHLSL(source, phxvk::ShaderStage::Geometry, pEntrypoint);
+    const std::string &gsSource = preprocessed.empty() ? source : preprocessed;
     const phxvk::GeometryShaderInfo shape =
-        phxvk::DescribeGeometryShader(source.c_str(), source.size(), pEntrypoint);
+        phxvk::DescribeGeometryShader(gsSource.c_str(), gsSource.size(), pEntrypoint);
     if (shape.present)
     {
-      const phxvk::GsProgram gs = phxvk::AnalyseGeometryShader(source, pEntrypoint, "v", shape);
+      const phxvk::GsProgram gs = phxvk::AnalyseGeometryShader(gsSource, pEntrypoint, "v", shape);
       phxvk::CompiledShader emu;
       if (gs.ok)
       {
-        const std::string extra = phxvk::TranslateGeometryShaderToVertex(source, gs, pEntrypoint, "v", "GSEMU_PACKED");
+        const std::string extra = phxvk::TranslateGeometryShaderToVertex(gsSource, gs, pEntrypoint, "v", "GSEMU_PACKED");
         if (!extra.empty())
         {
-          const std::string combined = source + extra;
+          const std::string combined = gsSource + extra;
           const std::string emuEntry = std::string(pEntrypoint) + "_emu";
           emu = phxvk::CompileHLSL(combined.c_str(), combined.size(), emuEntry.c_str(),
                                    phxvk::ShaderStage::Vertex, "gs-emu/vs_5_0");

@@ -971,6 +971,36 @@ GeometryShaderInfo DescribeGeometryShader(const char *source, size_t length, con
   return info;
 }
 
+// A separate function, not a mode of CompileHLSL: this returns text, and the
+// callers that want it (the geometry-shader analysis) must not pay for a SPIR-V
+// compile they do not use.
+std::string PreprocessHLSL(const std::string &src, ShaderStage stage, const char *entryPoint)
+{
+  shaderc_compiler_t compiler = shaderc_compiler_initialize();
+  if (!compiler) return std::string();
+  shaderc_compile_options_t options = shaderc_compile_options_initialize();
+  shaderc_compile_options_set_source_language(options, shaderc_source_language_hlsl);
+  shaderc_compile_options_set_target_env(options, shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_1);
+  shaderc_compile_options_set_auto_map_locations(options, true);
+  shaderc_compile_options_set_auto_bind_uniforms(options, false);
+  shaderc_compile_options_set_hlsl_io_mapping(options, true);
+  shaderc_compile_options_set_hlsl_offsets(options, true);
+
+  shaderc_compilation_result_t res = shaderc_compile_into_preprocessed_text(
+      compiler, src.c_str(), src.size(), ShadercKind(stage), "shader.hlsl", entryPoint ? entryPoint : "main", options);
+  std::string out;
+  if (res && shaderc_result_get_compilation_status(res) == shaderc_compilation_status_success)
+  {
+    const char *text = shaderc_result_get_bytes(res);
+    const size_t len = shaderc_result_get_length(res);
+    if (text && len) out.assign(text, len);
+  }
+  if (res) shaderc_result_release(res);
+  shaderc_compile_options_release(options);
+  shaderc_compiler_release(compiler);
+  return out;
+}
+
 CompiledShader CompileHLSL(const char *source, size_t length, const char *entryPoint, ShaderStage stage, const char *debugName)
 {
   CompiledShader result;

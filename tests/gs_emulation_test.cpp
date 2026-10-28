@@ -544,6 +544,25 @@ void g( triangle VSOUT input[3], inout TriangleStream<GSOUT> OutputStream )
 }
 )GSSRC";
 
+// An Append that only exists after the preprocessor runs.  Analysed as source it
+// looks like a shader that appends nothing; analysed after PreprocessHLSL() it
+// is an ordinary two-Append shape.
+static const char *kAppendViaDefine = R"GSSRC(
+#define EMIT(o, v) o.Append(v)
+struct VSIN  { float3 Position : POSITION0; };
+struct VSOUT { float4 Position : SV_POSITION; };
+struct GSOUT { float4 Position : SV_POSITION; };
+VSOUT v(VSIN x) { VSOUT o; o.Position = float4(x.Position,1); return o; }
+[maxvertexcount(4)]
+void g( triangle VSOUT input[3], inout TriangleStream<GSOUT> OutputStream )
+{
+	GSOUT a; a.Position = input[0].Position;
+	GSOUT b; b.Position = input[1].Position;
+	EMIT(OutputStream, a);
+	EMIT(OutputStream, b);
+}
+)GSSRC";
+
 static const char *kSequentialOverLimit = R"GSSRC(
 struct VSIN  { float3 Position : POSITION0; };
 struct VSOUT { float4 Position : SV_POSITION; };
@@ -861,6 +880,7 @@ int main()
       { "sequential Appends still add up", kSequentialOverLimit, false, "maxvertexcount" },
       { "switch fallthrough is counted in full", kSwitchFallthrough, true, nullptr },
       { "switch fallthrough over the limit is refused", kSwitchFallthroughOverLimit, false, "maxvertexcount" },
+      { "an Append behind a #define is invisible in the source", kAppendViaDefine, false, "#define" },
     };
     for (const auto &c : cases)
     {
@@ -877,6 +897,24 @@ int main()
         Check(g.reason.find(c.reason) != std::string::npos,
               "%s: the reason names the cause ('%s', got '%s')", c.name, c.reason, g.reason.c_str());
     }
+  }
+
+  // --- preprocessing makes a #define'd Append visible ----------------------
+  printf("\ngs_emulation: preprocessed source\n");
+  {
+    const phxvk::GeometryShaderInfo rawShape = phxvk::DescribeGeometryShader(kAppendViaDefine, strlen(kAppendViaDefine), "g");
+    const std::string pre = phxvk::PreprocessHLSL(kAppendViaDefine, phxvk::ShaderStage::Geometry, "g");
+    Check(!pre.empty(), "PreprocessHLSL returns text for a valid shader");
+
+    const phxvk::GeometryShaderInfo preShape = phxvk::DescribeGeometryShader(pre.c_str(), pre.size(), "g");
+    const phxvk::GsProgram asSource = phxvk::AnalyseGeometryShader(kAppendViaDefine, "g", "v", rawShape);
+    const phxvk::GsProgram asPreprocessed = phxvk::AnalyseGeometryShader(pre, "g", "v", preShape);
+    Check(!asSource.ok, "the un-preprocessed source is refused (nothing appends in its text)");
+    Check(asPreprocessed.ok, "the preprocessed source is accepted%s%s", asPreprocessed.ok ? "" : ": ",
+          asPreprocessed.ok ? "" : asPreprocessed.reason.c_str());
+    // The count itself is exercised through the translation: a shape whose
+    // Appends exceed maxvertexcount is refused by AnalyseGeometryShader, and this
+    // one is accepted, so the two Appends were seen.
   }
 
   if (g_failures) { printf("%d CHECK(S) FAILED\n", g_failures); return g_failures; }
