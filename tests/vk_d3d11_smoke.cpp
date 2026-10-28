@@ -1538,6 +1538,7 @@ int main(int argc, char **argv)
     printf("\nFAIL: %d check(s) failed\n", g_failures);
     return 1;
   }
-  printf("\nPASS: %d/%d cases rendered correctly on MoltenVK\n", g_resultCount, g_resultCount);
+  printf("\nPASS: %d/%d cases rendered correctly on %s\n", g_resultCount, g_resultCount,
+         phxvk::DeviceName());
   return 0;
 }

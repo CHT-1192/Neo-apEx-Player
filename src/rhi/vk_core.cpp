@@ -10,10 +10,18 @@
 
 namespace phxvk
 {
+// Outside the anonymous namespace below: the tests call it, so it needs
+// external linkage.  Kept as a copy because vkShutdown() clears the properties
+// it comes from, and the summaries are printed after shutting down.
+static char g_deviceName[256] = {0};
+
+const char *DeviceName() { return g_deviceName[0] ? g_deviceName : "the active Vulkan device"; }
+
 
 namespace
 {
 Device g_device;
+
 FILE *g_logFile = nullptr;
 bool g_initialized = false;
 bool g_wantValidation = false;
@@ -305,6 +313,7 @@ void vkInitialize(bool enableValidation, const char *appName)
   vkGetPhysicalDeviceMemoryProperties(d.physical, &d.memProps);
   vkGetPhysicalDeviceFeatures(d.physical, &d.features);
 
+  snprintf(g_deviceName, sizeof(g_deviceName), "%s", d.props.deviceName);
   LogInfo("Vulkan device: %s (api %u.%u.%u)", d.props.deviceName, VK_VERSION_MAJOR(d.props.apiVersion), VK_VERSION_MINOR(d.props.apiVersion), VK_VERSION_PATCH(d.props.apiVersion));
 
   d.hasDynamicRendering = HasDeviceExtension(d.physical, VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);

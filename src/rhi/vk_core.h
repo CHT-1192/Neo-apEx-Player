@@ -78,6 +78,9 @@ void vkRequestValidation(bool enable);
 bool vkValidationRequested();
 void vkShutdown();
 
+// The device name, kept because vkShutdown() clears the properties it came from.
+const char *DeviceName();
+
 // Prints the accumulated frame cost, split into "blocked on the GPU" and "the
 // CPU was working", then resets the counters.
 void PrintFrameStats();
