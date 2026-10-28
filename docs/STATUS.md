@@ -1139,14 +1139,24 @@ because "needs investigation" is how a list like this rots.
    *Closing it:* obtain one reference per project and run the dump-and-compare
    loop that was used for Clean Slate.
 
-3. **Geometry shader coverage has three known holes**, all in
-   `src/rhi/gs_emulation.cpp`: the fat vertex is a vertex buffer, so a shader
-   emitting more than six vertices per primitive is refused; the analysis runs on
-   the source rather than the preprocessed shader, so an `Append` hidden behind a
-   `#define` is missed; and `Append` counting sums across paths, so a `switch`
-   whose arms are exclusive is refused for the wrong reason.
-   *Closing it:* storage-buffer fat vertex, preprocess before analysing, count
-   appends per control-flow path.
+3. **Geometry shader coverage has two holes left**, both in
+   `src/rhi/gs_emulation.cpp`:
+
+   * the fat vertex travels in **vertex attributes**, so a shape needing more
+     locations than the device has is refused with the numbers spelled out (the
+     fix is a storage buffer, which has no attribute limit);
+   * the analysis reads the **source** rather than the preprocessed shader, so an
+     `Append` written through a `#define` is invisible and the shape is refused
+     with that stated.  `shaderc_compile_into_preprocessed_text()` exists and is
+     the obvious fix; it was not taken in the same pass because it changes the
+     text the working shapes are generated from, and verifying that needs a GPU.
+
+   `Append` counting is no longer a hole: it now follows the longest path through
+   `if`/`else` and `switch` (through fallthrough) instead of summing mutually
+   exclusive arms, so a legal shader is no longer refused for a count it cannot
+   reach.  Five fixtures cover it, including the controls that sequential
+   Appends still add up and that fallthrough is still counted in full.
+   *Closing the rest:* storage-buffer fat vertex; preprocess before analysing.
 
 4. **Linux builds and passes its tests; nothing has played Clean Slate on it.**
    The `Linux` workflow configures with clang, builds every target, passes 40 CPU
