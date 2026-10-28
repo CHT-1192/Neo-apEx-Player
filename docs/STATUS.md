@@ -1148,10 +1148,15 @@ because "needs investigation" is how a list like this rots.
    *Closing it:* storage-buffer fat vertex, preprocess before analysing, count
    appends per control-flow path.
 
-4. **No build has been attempted on Windows or Linux.**  Windows would need
-   `compat/` disabled (the real SDK headers are the point there); Linux needs the
-   case-sensitivity shim and a decision about the GDI subset.
-   *Closing it:* a CI matrix job that configures and runs `phx_smoke`.
+4. **Windows has still never been built.**  Linux has: the `Linux` workflow
+   configures with clang, builds every target, passes 40 CPU checks and renders
+   7/7 smoke cases on Mesa's lavapipe.  Windows would need `compat/` disabled and
+   the engine's own D3D11 backend, which is a second backend rather than a flag;
+   MinGW cannot compile the vendored code at all (`-fdelayed-template-parsing` is
+   clang-only), so clang-cl is the only viable compiler there.
+   *Closing it:* that backend, then the same kind of job for it.  Note that
+   "Linux builds" is not "Clean Slate plays on Linux": no GPU has run it, and the
+   FreeType text path has only been exercised as far as compiling.
 
 5. **Five of the ten shipped songs cannot be loaded by the closed-source synth**
    (table above).  Not fixable here: the release has `mvx.h` and the x86-32
