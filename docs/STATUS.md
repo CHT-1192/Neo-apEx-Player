@@ -1139,34 +1139,26 @@ because "needs investigation" is how a list like this rots.
    *Closing it:* obtain one reference per project and run the dump-and-compare
    loop that was used for Clean Slate.
 
-3. **Geometry shader coverage has one hole left**: the fat vertex travels in
-   **vertex attributes**, so a shape needing more attribute locations than the
-   device has is refused with the numbers spelled out.  The fix is a storage
-   buffer, which has no such limit, and it is not done: the HLSL structured-buffer
-   element layout has to agree byte for byte with the CPU-side vertex layout, and
-   a mismatch would corrupt every emitted vertex without failing anything.  It
-   wanted a render-level test for a wide input struct first, and now has one:
-   `phx_smoke` case 8 draws a geometry shader with an 8-attribute layout (24
-   attribute locations) through the emulator and checks the pixel.  It passes,
-   which measured the ceiling rather than assuming it -- this device allows **31**
-   vertex attributes, so 24 fits; at Vulkan's minimum of 16 the limit would bite
-   at six attributes per input vertex.
-   *Closing it:* the buffer, gated by that case (it must keep passing, and a wider
-   variant should start passing too).
-
-   Two holes in the same file **are** closed now:
+3. ~~Geometry shader coverage~~ -- **closed**.  All three holes the list used to
+   carry are gone:
 
    * `Append` counting follows the longest path through `if`/`else` and `switch`
-     (through fallthrough) instead of summing mutually exclusive arms, so a legal
-     shader is no longer refused for a count it cannot reach;
-   * the analysis runs on the **preprocessed** source
-     (`shaderc_compile_into_preprocessed_text`), so an `Append` written through a
-     `#define` is seen instead of refused.  Both the analysis and the translated
-     stage are generated from that same text, so they cannot disagree.
+     (through fallthrough) instead of summing mutually exclusive arms;
+   * the analysis runs on the **preprocessed** source, so an `Append` written
+     through a `#define` is seen, and the translated stage is generated from that
+     same text so the two cannot disagree;
+   * the fat vertex now travels in a **storage buffer** (`StructuredBuffer<...>`
+     at `register(t15)`, bound by the shim at `kBindingTexture + 15`), not in
+     vertex attributes, so no shape is refused for its attribute count.  The
+     shader generation, the buffer usage and the descriptor write are all in this
+     change; the demo's own geometry shader frame is byte-identical before and
+     after it, which is how the structured-buffer element layout was checked
+     against the CPU-side vertex layout rather than reasoned about.
 
-   Six fixtures cover them, including the controls: sequential Appends still add
-   up, fallthrough is still counted in full, and the `#define` shape is refused
-   as raw source and accepted once preprocessed.
+   Evidence, all measured on this machine: `phx_smoke` 9/9, including a case that
+   asks for **33 attribute locations on a device that allows 31** -- impossible
+   under the attribute scheme, and rendering now; plus the emulated path's demo
+   frame and the 0:31 regression frame, both byte-identical.
 
 4. **Linux builds and passes its tests; nothing has played Clean Slate on it.**
    The `Linux` workflow configures with clang, builds every target, passes 40 CPU
