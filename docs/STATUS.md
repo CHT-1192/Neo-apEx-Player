@@ -1226,6 +1226,29 @@ Recorded because the first version of this note claimed the shim was leaking
 state, and the probe that would have shown it (a scissor of 64x64) took ten
 minutes once it was actually looked at.
 
+## What the binary is made of, and what shrinking it costs
+
+Measured on the player, macOS:
+
+| Change | `neo_apex_player` |
+| --- | --- |
+| as it was (RelWithDebInfo, no dead-strip) | 2.66 MB |
+| `-Wl,-dead_strip` (now always on) | 1.76 MB |
+| `+ -Os`, no `-g`, strip locals | 1.26 MB |
+| `+ LTO` | **1.13 MB** |
+
+The drop from 2.66 to 1.76 is almost all debug info. After that the binary is
+811 KB of `__text` and the question becomes "what code is in there" -- the answer
+is the engine, not a library: glslang/shaderc are not statically linked (20
+matching symbols), so there is no block to remove wholesale. LTO is the last
+lever that does anything, and it is worth 10%.
+
+Separately, and this is a *memory* win rather than a disk one: the HLSL compiler
+was generating SPIR-V debug info that nothing reads (OpSource/OpLine only; our
+reflection uses names and decorations, which are unaffected). Turning it off took
+the demo's peak resident set from **1.99 GB to 1.84 GB** with the 0:31 frame
+byte-identical, so reflection still works.
+
 ## Verified details worth not re-deriving
 
 * Shader compilation is fast: 83 filters compile in **1.2 s total** (~14 ms

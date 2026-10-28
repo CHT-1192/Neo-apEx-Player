@@ -1039,7 +1039,9 @@ CompiledShader CompileHLSL(const char *source, size_t length, const char *entryP
   // Keep names and decorations intact: our reflection relies on them and the
   // engine compiles shaders at load time only.
   shaderc_compile_options_set_optimization_level(options, shaderc_optimization_level_zero);
-  shaderc_compile_options_set_generate_debug_info(options);
+  // No SPIR-V debug info: it is only OpSource/OpLine, nothing reads it, and it
+  // is by far the biggest part of the module for a long HLSL shader.  Names and
+  // decorations are unaffected -- reflection depends on those, not on this.
   shaderc_compile_options_set_auto_map_locations(options, true);
   shaderc_compile_options_set_auto_bind_uniforms(options, false);
   shaderc_compile_options_set_hlsl_io_mapping(options, true);

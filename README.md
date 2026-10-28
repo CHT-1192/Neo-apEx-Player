@@ -66,12 +66,13 @@ cmake -S . -B build -DAPEX_BUILD_PLAYER=ON -DAPEX_SIZE_OPTIMIZED=ON
 | Build | `neo_apex_player` |
 | --- | --- |
 | default (`RelWithDebInfo`) | 1.76 MB |
-| `-DAPEX_SIZE_OPTIMIZED=ON` | **1.26 MB** |
+| `-DAPEX_SIZE_OPTIMIZED=ON` (`-Os`, no `-g`, LTO, strip locals) | **1.13 MB** |
 
 The default dropped from 2.66 MB to 1.76 MB just by dead-stripping, which is now
-always on. The size option adds `-Os`, drops `-g` and strips local symbols at link
-time; it costs about 3% of frame time (9.89 ms to 10.17 ms at 320x180), and the
-rendered frame is bit-for-bit identical either way.
+always on. Before any of that the same code was 2.66 MB. The size option adds `-Os`, drops
+`-g`, enables LTO and strips local symbols at link time; it costs about 3% of
+frame time (9.89 ms to 10.17 ms at 320x180), and the rendered frame is
+bit-for-bit identical either way.
 
 Nothing here is a 64k-style trick: no cruncher, no procedural content, no
 hand-written assembly. It is the compiler given a different objective.

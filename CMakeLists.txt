@@ -14,6 +14,10 @@ option(APEX_SIZE_OPTIMIZED "Build the smallest binary rather than the fastest (-
 if(NOT CMAKE_BUILD_TYPE)
   if(APEX_SIZE_OPTIMIZED)
     set(CMAKE_BUILD_TYPE MinSizeRel)
+    # Whole-program visibility: another 10% off the binary (1.26 MB -> 1.13 MB),
+    # measured with the size option on.  Not on by default -- it lengthens the
+    # link, which is the wrong trade for the edit/compile loop.
+    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
   else()
     set(CMAKE_BUILD_TYPE RelWithDebInfo)
   endif()
