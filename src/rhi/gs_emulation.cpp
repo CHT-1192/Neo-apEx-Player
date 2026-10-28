@@ -886,17 +886,7 @@ std::string TranslateGeometryShaderToVertex(const std::string &source, const GsP
   for (int i = 1; i < gs.inputVertices; i++) out += " " + vsInputType + " a" + std::to_string(i) + ";";
   out += " };\n";
 
-  // The fat vertices arrive in a storage buffer, not in vertex attributes: a
-  // shape whose inputs add up to more attribute locations than the device has
-  // would otherwise be refused, and the demo's own shapes come close (24 of 31
-  // here, 6 per input vertex on a device at Vulkan's minimum of 16).
-  //
-  // t15 keeps out of the way of the engine's own t registers, and the shim maps
-  // it to binding kBindingTexture + 15.
-  out += "StructuredBuffer<" + std::string(packedInputName) + "> gsemu_fat : register(t15);\n";
-
-  out += outType + " " + gsEntry + "_emu( uint gsemu_vid : SV_VertexID )\n{\n";
-  out += "  " + std::string(packedInputName) + " gsemu_packed = gsemu_fat[gsemu_vid];\n";
+  out += outType + " " + gsEntry + "_emu( " + packedInputName + " gsemu_packed, uint gsemu_vid : SV_VertexID )\n{\n";
   out += "  " + stageType + " " + inputName + "[" + std::to_string(gs.inputVertices) + "];\n";
   for (int i = 0; i < gs.inputVertices; i++)
     out += "  " + inputName + "[" + std::to_string(i) + "] = " + vertexEntry + "( gsemu_packed.a" + std::to_string(i) + " );\n";

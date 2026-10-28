@@ -2113,10 +2113,7 @@ bool ContextImpl::DrawInternal(bool indexed, UINT count, UINT instanceCount, UIN
     if (cached == emulatedGeometryCache.end())
     {
       EmulatedGeometry entry;
-      // A storage buffer, not a vertex buffer: the fat vertex is read by index
-      // in the emulated vertex stage (StructuredBuffer<...> at register(t15)),
-      // which is what keeps the shape free of the device's attribute limit.
-      entry.vbo = phxvk::CreateBuffer(fat.vertices.size(), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+      entry.vbo = phxvk::CreateBuffer(fat.vertices.size(), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &entry.vboMemory);
       entry.ibo = phxvk::CreateBuffer(fat.indices.size() * sizeof(uint32_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &entry.iboMemory);
@@ -2159,26 +2156,6 @@ bool ContextImpl::DrawInternal(bool indexed, UINT count, UINT instanceCount, UIN
   if (set == VK_NULL_HANDLE) return false;
   std::vector<uint32_t> dynamicOffsets;
   if (!WriteDescriptorSet(set, bindings, dynamicOffsets)) return false;
-
-  // The emulated vertex stage reads its fat vertex from a storage buffer at
-  // register(t15), which the shim maps to kBindingTexture + 15.  That binding is
-  // in the set layout (it comes from the pipeline's own reflection) but it is not
-  // an engine binding, so WriteDescriptorSet() does not know about it.
-  if (emuVb != VK_NULL_HANDLE)
-  {
-    VkDescriptorBufferInfo info{};
-    info.buffer = emuVb;
-    info.offset = emuVbOffset;
-    info.range = VK_WHOLE_SIZE;
-    VkWriteDescriptorSet write{};
-    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    write.dstSet = set;
-    write.dstBinding = phxvk::kBindingTexture + 15;
-    write.descriptorCount = 1;
-    write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    write.pBufferInfo = &info;
-    vkUpdateDescriptorSets(phxvk::Vk().device, 1, &write, 0, nullptr);
-  }
   vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &set, (uint32_t)dynamicOffsets.size(), dynamicOffsets.empty() ? nullptr : dynamicOffsets.data());
 
   // Vertex buffers: only the slots the pipeline actually consumes matter, but
@@ -2187,8 +2164,8 @@ bool ContextImpl::DrawInternal(bool indexed, UINT count, UINT instanceCount, UIN
   {
     if (emuVb != VK_NULL_HANDLE)
     {
-      // The emulated stage reads its input from a storage buffer, so no vertex
-      // buffer is bound at all: every slot of the original geometry is replaced.
+      // The fat buffer replaces every slot of the original geometry.
+      if (i == 0) vkCmdBindVertexBuffers(cmd, 0, 1, &emuVb, &emuVbOffset);
       continue;
     }
     if (!vertexBuffers[i]) continue;

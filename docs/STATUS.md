@@ -1139,26 +1139,30 @@ because "needs investigation" is how a list like this rots.
    *Closing it:* obtain one reference per project and run the dump-and-compare
    loop that was used for Clean Slate.
 
-3. ~~Geometry shader coverage~~ -- **closed**.  All three holes the list used to
-   carry are gone:
+3. **Geometry shader coverage: two of the three holes are closed, the third is
+   back open with evidence.**
 
-   * `Append` counting follows the longest path through `if`/`else` and `switch`
-     (through fallthrough) instead of summing mutually exclusive arms;
-   * the analysis runs on the **preprocessed** source, so an `Append` written
-     through a `#define` is seen, and the translated stage is generated from that
-     same text so the two cannot disagree;
-   * the fat vertex now travels in a **storage buffer** (`StructuredBuffer<...>`
-     at `register(t15)`, bound by the shim at `kBindingTexture + 15`), not in
-     vertex attributes, so no shape is refused for its attribute count.  The
-     shader generation, the buffer usage and the descriptor write are all in this
-     change; the demo's own geometry shader frame is byte-identical before and
-     after it, which is how the structured-buffer element layout was checked
-     against the CPU-side vertex layout rather than reasoned about.
+   Closed: `Append` counting follows the longest path through `if`/`else` and
+   `switch` (through fallthrough); the analysis runs on the **preprocessed**
+   source, so an `Append` behind a `#define` is seen, and the translated stage is
+   generated from the same text.
 
-   Evidence, all measured on this machine: `phx_smoke` 9/9, including a case that
-   asks for **33 attribute locations on a device that allows 31** -- impossible
-   under the attribute scheme, and rendering now; plus the emulated path's demo
-   frame and the 0:31 regression frame, both byte-identical.
+   Open: the fat vertex still travels in **vertex attributes**, so a shape needing
+   more attribute locations than the device has is refused.  A storage-buffer
+   version was written, and it **worked on the smoke cases and failed on the
+   demo**: frame 3697 of Clean Slate became an over-exposed streaked mess while
+   frame 3601 stayed byte-identical, which is the HLSL structured-buffer element
+   layout disagreeing with the CPU-side vertex layout for the engine's real vertex
+   formats -- the exact risk that made this item worth doing carefully.  It was
+   reverted rather than shipped half-right; the demo has been byte-identical at
+   0:31 since.
+
+   *What the next attempt needs:* the generated stage must reconstruct its inputs
+   from byte offsets it is *told*, not from a struct the compiler lays out --
+   a `ByteAddressBuffer` plus the `D3D11_INPUT_ELEMENT_DESC` offsets, which the
+   shim has at pipeline-creation time and the translator does not.  A smoke case
+   with a padded, mixed-type input layout is the test to write first: the three
+   simple float4 layouts that passed did not expose this.
 
 4. **Linux builds and passes its tests; nothing has played Clean Slate on it.**
    The `Linux` workflow configures with clang, builds every target, passes 40 CPU
