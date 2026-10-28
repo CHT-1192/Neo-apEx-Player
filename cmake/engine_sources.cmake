@@ -14,9 +14,10 @@ set(APEX_PLATFORM_SOURCES
   # The engine window-handle resolver: dependency-free so the D3D11 shim
   # can link it without BaseLib/Logger.
   src/platform/window_handle.cpp
-  # CoreText/CoreGraphics implementation of the GDI subset the text-mesh
-  # generator (Mesh.cpp) and the texgen picture path (Texgen.cpp) need.
-  src/platform/gdi_posix.cpp
+  # GDI subset the text-mesh generator (Mesh.cpp) needs: CoreText on
+  # Apple, FreeType everywhere else.  Both emit the same GGO_NATIVE
+  # outline records, which is what Mesh.cpp walks.
+  $<IF:$<PLATFORM_ID:Darwin>,src/platform/gdi_posix.cpp,src/platform/gdi_freetype.cpp>
   # Globals the unvendored editor UI used to define.
   src/platform/tool_ui_dropped.cpp
 )

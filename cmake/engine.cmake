@@ -57,6 +57,17 @@ if(APPLE)
     "-framework CoreText"
     "-framework ImageIO"
   )
+else()
+  # src/platform/gdi_freetype.cpp implements the same GDI subset on FreeType.
+  pkg_check_modules(FREETYPE REQUIRED freetype2)
+  target_include_directories(apex_engine PUBLIC ${FREETYPE_INCLUDE_DIRS})
+  target_link_directories(apex_engine PUBLIC ${FREETYPE_LIBRARY_DIRS})
+  target_link_libraries(apex_engine PUBLIC ${FREETYPE_LINK_LIBRARIES})
+  # GLU is not part of any framework here; Mesh.cpp's tessellator needs it.
+  pkg_check_modules(GL REQUIRED gl)
+  pkg_check_modules(GLU REQUIRED glu)
+  target_include_directories(apex_engine PUBLIC ${GL_INCLUDE_DIRS} ${GLU_INCLUDE_DIRS})
+  target_link_libraries(apex_engine PUBLIC ${GL_LINK_LIBRARIES} ${GLU_LINK_LIBRARIES})
 endif()
 
 # ---------------------------------------------------------------------------
