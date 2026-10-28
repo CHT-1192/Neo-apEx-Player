@@ -1145,10 +1145,14 @@ because "needs investigation" is how a list like this rots.
    buffer, which has no such limit, and it is not done: the HLSL structured-buffer
    element layout has to agree byte for byte with the CPU-side vertex layout, and
    a mismatch would corrupt every emitted vertex without failing anything.  It
-   wants a render-level test for a wide input struct first, which this repository
-   does not have -- the only render-level check of the emulated path is a frame
-   of the demo compared byte for byte.
-   *Closing it:* that test, then the buffer.
+   wanted a render-level test for a wide input struct first, and now has one:
+   `phx_smoke` case 8 draws a geometry shader with an 8-attribute layout (24
+   attribute locations) through the emulator and checks the pixel.  It passes,
+   which measured the ceiling rather than assuming it -- this device allows **31**
+   vertex attributes, so 24 fits; at Vulkan's minimum of 16 the limit would bite
+   at six attributes per input vertex.
+   *Closing it:* the buffer, gated by that case (it must keep passing, and a wider
+   variant should start passing too).
 
    Two holes in the same file **are** closed now:
 
