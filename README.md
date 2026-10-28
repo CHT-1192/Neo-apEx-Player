@@ -131,10 +131,15 @@ The packer, the cruncher and the tricks that fit under the budget — 20 bytes o
 headroom, the sacrificed window title — belong to the original Windows
 toolchain, which this project neither produces nor consumes.
 
-macOS is the target platform and the only one tested. Windows would work with
-`compat/` disabled; Linux needs a case-sensitivity shim and a decision about the
-GDI subset. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) explains how the port
-is put together.
+macOS is the target platform. **Linux builds and passes its tests** on GitHub's
+runners (clang, Mesa lavapipe): 40 CPU checks and 7 render cases, geometry shaders
+included, which lavapipe supports. Playing Clean Slate on Linux has *not* been
+demonstrated -- that needs a real GPU and the text path exercised end to end.
+Windows would need `compat/` disabled and the engine's own D3D11 backend; MinGW
+cannot compile the vendored code at all, because it relies on clang's
+`-fdelayed-template-parsing`.
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) explains how the port is put
+together.
 
 ## Development
 
