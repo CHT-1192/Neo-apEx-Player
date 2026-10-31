@@ -523,6 +523,11 @@ HRESULT CreateTextureCommon(DeviceImpl *device, TextureImpl *tex, VkImageType ty
   if (type == VK_IMAGE_TYPE_2D && tex->arraySize >= 6 && (tex->miscFlags & D3D11_RESOURCE_MISC_TEXTURECUBE)) ci.flags |= VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
 
   VkResult res = vkCreateImage(phxvk::Vk().device, &ci, nullptr, &tex->image);
+  if (getenv("APEX_MEM_PROBE"))
+    phxvk::LogInfo("[tex] %ux%ux%u mips %u array %u fmt %d -> %.1f MB", tex->width, tex->height, tex->depth,
+                   tex->mipLevels, tex->arraySize, (int)format,
+                   (double)ci.extent.width * ci.extent.height * ci.extent.depth * (ci.mipLevels ? ci.mipLevels : 1) / 1.0e6),
+                 phxvk::LogInfo("[tex]   bind 0x%x misc 0x%x", (unsigned)tex->bindFlags, (unsigned)tex->miscFlags);
   if (res != VK_SUCCESS)
   {
     phxvk::LogError("vkCreateImage failed for %ux%ux%u format %d: %s", tex->width, tex->height, tex->depth, (int)format, phxvk::VkResultName(res));

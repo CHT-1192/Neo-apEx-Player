@@ -515,6 +515,45 @@ uint32_t FindMemoryType(uint32_t typeBits, VkMemoryPropertyFlags props)
   return 0;
 }
 
+// Accounting, so "where does the peak come from" is a measurement rather than a
+// guess.  Cheap: two counters per allocation, printed on demand.
+namespace
+{
+struct MemStats
+{
+  uint64_t images = 0, imageBytes = 0;
+  uint64_t buffers = 0, bufferBytes = 0;
+  uint64_t hostVisibleBytes = 0;
+  std::vector<std::pair<uint64_t, std::string>> largest;
+
+  void Add(const char *kind, uint64_t bytes, VkMemoryPropertyFlags props, const char *what)
+  {
+    if (props & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) hostVisibleBytes += bytes;
+    if (strcmp(kind, "image") == 0) { images++; imageBytes += bytes; }
+    else { buffers++; bufferBytes += bytes; }
+    largest.emplace_back(bytes, std::string(kind) + (what ? what : ""));
+    if (largest.size() > 4096)
+    {
+      std::sort(largest.begin(), largest.end(), [](const auto &a, const auto &b) { return a.first > b.first; });
+      largest.resize(32);
+    }
+  }
+};
+MemStats g_memStats;
+} // namespace
+
+void PrintMemoryStats()
+{
+  std::sort(g_memStats.largest.begin(), g_memStats.largest.end(),
+            [](const auto &a, const auto &b) { return a.first > b.first; });
+  LogInfo("[mem] images: %llu (%.1f MB), buffers: %llu (%.1f MB), host-visible: %.1f MB",
+          (unsigned long long)g_memStats.images, g_memStats.imageBytes / 1048576.0,
+          (unsigned long long)g_memStats.buffers, g_memStats.bufferBytes / 1048576.0,
+          g_memStats.hostVisibleBytes / 1048576.0);
+  for (size_t i = 0; i < g_memStats.largest.size() && i < 8; i++)
+    LogInfo("[mem]   %6.1f MB  %s", g_memStats.largest[i].first / 1048576.0, g_memStats.largest[i].second.c_str());
+}
+
 VkDeviceMemory AllocateAndBind(VkImage image, VkMemoryRequirements req, VkMemoryPropertyFlags props)
 {
   Device &d = Vk();
@@ -524,6 +563,7 @@ VkDeviceMemory AllocateAndBind(VkImage image, VkMemoryRequirements req, VkMemory
   VkDeviceMemory mem = VK_NULL_HANDLE;
   PHXVK_CHECK(vkAllocateMemory(d.device, &ai, nullptr, &mem));
   PHXVK_CHECK(vkBindImageMemory(d.device, image, mem, 0));
+  g_memStats.Add("image", req.size, props, " image");
   return mem;
 }
 
@@ -536,6 +576,7 @@ VkDeviceMemory AllocateAndBindBuffer(VkBuffer buffer, VkMemoryRequirements req, 
   VkDeviceMemory mem = VK_NULL_HANDLE;
   PHXVK_CHECK(vkAllocateMemory(d.device, &ai, nullptr, &mem));
   PHXVK_CHECK(vkBindBufferMemory(d.device, buffer, mem, 0));
+  g_memStats.Add("buffer", req.size, props, " buffer");
   return mem;
 }
 

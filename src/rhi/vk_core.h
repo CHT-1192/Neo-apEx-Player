@@ -78,6 +78,9 @@ void vkRequestValidation(bool enable);
 bool vkValidationRequested();
 void vkShutdown();
 
+// Totals for every image and buffer the shim has allocated, largest first.
+void PrintMemoryStats();
+
 // The device name, kept because vkShutdown() clears the properties it came from.
 const char *DeviceName();
 

@@ -1226,6 +1226,34 @@ Recorded because the first version of this note claimed the shim was leaking
 state, and the probe that would have shown it (a scissor of 64x64) took ten
 minutes once it was actually looked at.
 
+## Where the 1.8 GB of memory goes
+
+`--headless` runs of the demo peak at ~1.84 GB resident. The shim now accounts for
+every allocation and the answer is not a leak:
+
+    558 images  2444 MB
+    645 buffers  350 MB   (of which 308 MB host-visible, 64 MB of that the ring)
+
+and the five largest images are each **4096x4096, 13 mips, DXGI format 91,
+`bind = SHADER_RESOURCE|RENDER_TARGET`, `misc = GENERATE_MIPS`** -- 218 MB apiece,
+1.09 GB together.  They are the demo's procedural texture atlases: its own texgen
+filter shader contains `float d = 0.5f / 4096.0f`, so 4096 is baked into the
+content, not chosen by this port.  (The `<texturepage>` entries in the project
+declare `xres`/`yres` in log2 -- 8 to 11, i.e. 256 to 2048 -- and the atlases those
+pages are rendered into are the 4K ones.)
+
+So the memory is faithful to the original, and the peak is lower than the total
+allocated because most of it is freed through the deferred list and MoltenVK
+commits lazily.  Two things were worth measuring rather than assuming:
+
+* the five 4K atlases carry **full mip chains** and ask for mip generation.  That
+  is 25% of their size in levels nobody may sample, but `GENERATE_MIPS` says the
+  engine wants them, and the texgen shaders sample with explicit gradients.
+* 308 MB host-visible is staging, not a cache: it goes through `DeferFree` once
+  the upload has been submitted.
+
+Nothing here is worth changing without the original to compare against.
+
 ## What the binary is made of, and what shrinking it costs
 
 Measured on the player, macOS:
