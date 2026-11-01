@@ -159,16 +159,12 @@ jobs:
           )
           dir ${{ matrix.song }}.wav ${{ matrix.song }}.apxsndcache
 
-      - name: Make the 192 kHz / 24-bit version
-        # Resampled from the 44.1 kHz master, not synthesised at 192 kHz: the MVX
-        # library's rate is a compile-time constant in closed-source code, and
-        # rendering 4.35x more samples per tick would slow the music down rather
-        # than resolve it better.
-        shell: pwsh
-        run: |
-          $name = "${{ matrix.song }}"
-          ffmpeg -hide_banner -loglevel error -y -i "$name.wav" -ar 192000 -c:a pcm_s24le "${name}-192k24.wav"
-          Get-Item "$name.wav", "$name-192k24.wav", "$name.16.wav" | Select-Object Name, Length | Format-Table
+      # No resample step here: the runner has no ffmpeg, and adding a package
+      # install to get one is a poor trade for a conversion that takes a second
+      # anywhere else.  The artifact is the 24-bit master at the synth's own
+      # 44100 Hz; 192 kHz is made from it afterwards, and is a delivery format
+      # rather than more information -- MVX's rate is a compile-time constant in
+      # closed-source code.
 
       - name: Check the render is real audio
         shell: pwsh
@@ -220,7 +216,6 @@ jobs:
           name: music-${{ matrix.song }}
           path: |
             ${{ matrix.song }}.wav
-            ${{ matrix.song }}-192k24.wav
             ${{ matrix.song }}.16.wav
             ${{ matrix.song }}.apxsndcache
           # Three days, not thirty.
