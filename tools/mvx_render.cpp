@@ -37,6 +37,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <vector>
+#include <cmath>
+#include <string>
 
 // Declared locally, exactly as the tool does: mvx.h does not expose the machine
 // array.  The vtable order matters - Tick() first, then Render().
@@ -70,10 +72,12 @@ static void PutU16(FILE *f, unsigned v)
   fwrite(b, 1, 2, f);
 }
 
-// Canonical RIFF/WAVE, 16-bit stereo at the engine's 44100 Hz.
-static void WriteWavHeader(FILE *f, unsigned dataBytes)
+// Canonical RIFF/WAVE, stereo at the engine's 44100 Hz.  The synthesizer only
+// produces 16-bit through mvxSystem_ClipBuffer; 24-bit is converted from the
+// float mix here, which is strictly better than going through 16-bit first.
+static void WriteWavHeader(FILE *f, unsigned dataBytes, unsigned bits)
 {
-  const unsigned channels = 2, bits = 16, rate = MVX_SAMPLERATE;
+  const unsigned channels = 2, rate = MVX_SAMPLERATE;
   const unsigned blockAlign = channels * bits / 8, byteRate = rate * blockAlign;
 
   fwrite("RIFF", 1, 4, f);
@@ -138,6 +142,15 @@ int main(int argc, char **argv)
     return 2;
   }
 
+  int g_bits = 16;
+  for (int i = 1; i < argc; i++)
+    if (strcmp(argv[i], "--bits") == 0 && i + 1 < argc) g_bits = atoi(argv[++i]);
+  if (g_bits != 16 && g_bits != 24)
+  {
+    fprintf(stderr, "mvx_render: --bits must be 16 or 24 (got %d)\n", g_bits);
+    return 2;
+  }
+
   long musicSize = 0;
   unsigned char *music = ReadWholeFile(argv[1], &musicSize);
   if (!music)
@@ -183,7 +196,22 @@ int main(int argc, char **argv)
     fprintf(stderr, "mvx_render: cannot write %s\n", argv[2]);
     return 1;
   }
-  WriteWavHeader(out, 0); // patched once the real length is known
+  WriteWavHeader(out, 0, (unsigned)g_bits); // patched once the real length is known
+
+  // With a 24-bit master the player still needs 16-bit: its WAV/cache reader is
+  // 16-bit only, and the SoundCache is built from that stream.  Same float mix,
+  // one extra conversion, no second render.
+  std::string out16Path;
+  FILE *out16 = NULL;
+  if (g_bits == 24)
+  {
+    out16Path = std::string(argv[2]);
+    const size_t dot = out16Path.rfind('.');
+    out16Path = (dot == std::string::npos ? out16Path : out16Path.substr(0, dot)) + ".16.wav";
+    out16 = fopen(out16Path.c_str(), "wb");
+    if (!out16) { fprintf(stderr, "mvx_render: cannot write %s\n", out16Path.c_str()); return 1; }
+    WriteWavHeader(out16, 0, 16);
+  }
 
   std::vector<unsigned> markers;
   markers.reserve((size_t)mvxSystem_SongLength);
@@ -224,7 +252,32 @@ int main(int argc, char **argv)
     mvxSystem_ClipBuffer(mix32, mix16, n * 2);
 
     markers.push_back((unsigned)((framesRendered * 1000) / MVX_SAMPLERATE)); // marker in ms
-    if (fwrite(mix16, 1, (size_t)n * MVX_SAMPLESIZE, out) != (size_t)n * MVX_SAMPLESIZE)
+    if (g_bits == 24)
+    {
+      // float -> 24-bit, little endian, three bytes per sample
+      std::vector<unsigned char> s24((size_t)n * 6);
+      for (int i = 0; i < n * 2; i++)
+      {
+        double v = mix32[i];
+        if (v > 1.0) v = 1.0;
+        if (v < -1.0) v = -1.0;
+        const int q = (int)std::lround(v * 8388607.0);
+        s24[i * 3 + 0] = (unsigned char)(q & 0xFF);
+        s24[i * 3 + 1] = (unsigned char)((q >> 8) & 0xFF);
+        s24[i * 3 + 2] = (unsigned char)((q >> 16) & 0xFF);
+      }
+      if (fwrite(s24.data(), 1, s24.size(), out) != s24.size())
+      {
+        fprintf(stderr, "mvx_render: short write at tick %d\n", tick);
+        break;
+      }
+      if (out16 && fwrite(mix16, 1, (size_t)n * MVX_SAMPLESIZE, out16) != (size_t)n * MVX_SAMPLESIZE)
+      {
+        fprintf(stderr, "mvx_render: short write (16-bit copy) at tick %d\n", tick);
+        break;
+      }
+    }
+    else if (fwrite(mix16, 1, (size_t)n * MVX_SAMPLESIZE, out) != (size_t)n * MVX_SAMPLESIZE)
     {
       fprintf(stderr, "mvx_render: short write at tick %d\n", tick);
       break;
@@ -240,9 +293,16 @@ int main(int argc, char **argv)
          (double)framesRendered / MVX_SAMPLERATE);
 
   const unsigned dataBytes = (unsigned)(framesRendered * MVX_SAMPLESIZE);
+  const unsigned masterBytes = (unsigned)(framesRendered * 2 * (g_bits / 8));
   fseek(out, 0, SEEK_SET);
-  WriteWavHeader(out, dataBytes);
+  WriteWavHeader(out, masterBytes, (unsigned)g_bits);
   fclose(out);
+  if (out16)
+  {
+    fseek(out16, 0, SEEK_SET);
+    WriteWavHeader(out16, dataBytes, 16);
+    fclose(out16);
+  }
 
   mvxMixer_DeInit();
   mvxSystem_FreeMusic();
@@ -269,7 +329,7 @@ int main(int argc, char **argv)
       PutU32(cache, dataBytes);
       // Stream the payload back out of the WAV rather than holding the whole
       // song in memory a second time.
-      FILE *wav = fopen(argv[2], "rb");
+      FILE *wav = fopen(out16Path.empty() ? argv[2] : out16Path.c_str(), "rb");
       if (wav)
       {
         fseek(wav, 44, SEEK_SET);

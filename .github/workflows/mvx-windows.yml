@@ -143,7 +143,9 @@ jobs:
           rem Two outputs: a WAV to listen to, and the tool's own SoundCache
           rem container, which the player discovers on its own.
           dir demo\music\${{ matrix.song }}.mvm
-          mvx_render.exe demo\music\${{ matrix.song }}.mvm ${{ matrix.song }}.wav ${{ matrix.song }}.apxsndcache
+          rem 24-bit master; the tool also writes <name>.16.wav, which is what the
+          rem SoundCache and the player use, since its reader is 16-bit only.
+          mvx_render.exe demo\music\${{ matrix.song }}.mvm ${{ matrix.song }}.wav ${{ matrix.song }}.apxsndcache --bits 24
           rem The synth can exit 0 having written nothing (it faults inside
           rem mvxSystem_LoadMusic), so errorlevel alone is not evidence.  Demand
           rem the files.
@@ -157,13 +159,26 @@ jobs:
           )
           dir ${{ matrix.song }}.wav ${{ matrix.song }}.apxsndcache
 
+      - name: Make the 192 kHz / 24-bit version
+        # Resampled from the 44.1 kHz master, not synthesised at 192 kHz: the MVX
+        # library's rate is a compile-time constant in closed-source code, and
+        # rendering 4.35x more samples per tick would slow the music down rather
+        # than resolve it better.
+        shell: pwsh
+        run: |
+          $name = "${{ matrix.song }}"
+          ffmpeg -hide_banner -loglevel error -y -i "$name.wav" -ar 192000 -c:a pcm_s24le "${name}-192k24.wav"
+          Get-Item "$name.wav", "$name-192k24.wav", "$name.16.wav" | Select-Object Name, Length | Format-Table
+
       - name: Check the render is real audio
         shell: pwsh
         run: |
           # A song that came out as zeros would mean the harness linked but the
           # mixer never actually ran, which a byte count alone cannot tell.
           $name = "${{ matrix.song }}"
-          $wav = "$name.wav"
+          # The 16-bit copy, not the 24-bit master: this check reads int16 at
+          # offset 44 and would misread a 24-bit stream.
+          $wav = "$name.16.wav"
           $bytes = [System.IO.File]::ReadAllBytes($wav)
           if ($bytes.Length -lt 44) { throw "$name.wav is only $($bytes.Length) bytes" }
 
@@ -205,6 +220,8 @@ jobs:
           name: music-${{ matrix.song }}
           path: |
             ${{ matrix.song }}.wav
+            ${{ matrix.song }}-192k24.wav
+            ${{ matrix.song }}.16.wav
             ${{ matrix.song }}.apxsndcache
           # Three days, not thirty.
           retention-days: 3
