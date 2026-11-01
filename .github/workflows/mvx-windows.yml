@@ -159,12 +159,10 @@ jobs:
           )
           dir ${{ matrix.song }}.wav ${{ matrix.song }}.apxsndcache
 
-      # No resample step here: the runner has no ffmpeg, and adding a package
-      # install to get one is a poor trade for a conversion that takes a second
-      # anywhere else.  The artifact is the 24-bit master at the synth's own
-      # 44100 Hz; 192 kHz is made from it afterwards, and is a delivery format
-      # rather than more information -- MVX's rate is a compile-time constant in
-      # closed-source code.
+      # No resample step here, and not because the runner lacks ffmpeg: a 192 kHz
+      # version could only be a resample of the 44.1 kHz output, since MVX's rate
+      # is a compile-time constant in closed-source code.  Four times the file for
+      # the same information is not an upgrade.  The artifact is the 24-bit master.
 
       - name: Check the render is real audio
         shell: pwsh

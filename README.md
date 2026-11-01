@@ -57,13 +57,14 @@ WAV.
 
 Each run produces a **24-bit** master as well as the 16-bit file the player reads:
 the tool converts straight from the float mix (`--bits 24`) and writes both, since
-the player's reader is 16-bit only. The synthesizer itself runs at 44.1 kHz — that
-rate is a compile-time constant in closed-source code — so a 192 kHz version is a
-resample of that master rather than synthesis at 192 kHz:
+the player's reader is 16-bit only. 44.1 kHz / 24-bit is as good as this can get.
 
-```sh
-ffmpeg -i step010padding.wav -ar 192000 -c:a pcm_s24le cleanslate-192k24.wav
-```
+**Not 192 kHz.** The synthesizer's rate is a compile-time constant in closed-source
+code, so 192 kHz could only be a resample of the 44.1 kHz output -- four times the
+file for the same information. It was tried and removed; the reason is recorded
+here so nobody adds it back thinking it is an upgrade. The only step beyond
+24-bit that would be real is 32-bit float, which loses nothing relative to the
+synth's own mix; 24-bit already has more headroom than the mix uses.
 
 ### Binary size
 
