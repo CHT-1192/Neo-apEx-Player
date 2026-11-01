@@ -55,6 +55,16 @@ when you actually want the files. Put the `.apxsndcache` next to the project (or
 in `SoundCache/`) and the player finds it; `--music FILE` also takes a 16-bit PCM
 WAV.
 
+Each run produces a **24-bit** master as well as the 16-bit file the player reads:
+the tool converts straight from the float mix (`--bits 24`) and writes both, since
+the player's reader is 16-bit only. The synthesizer itself runs at 44.1 kHz — that
+rate is a compile-time constant in closed-source code — so a 192 kHz version is a
+resample of that master rather than synthesis at 192 kHz:
+
+```sh
+ffmpeg -i step010padding.wav -ar 192000 -c:a pcm_s24le cleanslate-192k24.wav
+```
+
 ### Binary size
 
 A default build keeps debug info. If you want the smallest binary instead:
