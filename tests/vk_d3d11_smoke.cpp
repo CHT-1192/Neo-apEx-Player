@@ -1496,6 +1496,137 @@ bool CaseGeomEmulationWide()
   return ok;
 }
 
+// A padded, mixed-type input layout through the emulated geometry path.  The
+// attribute-based fat vertex copies each element by semantic, so padding between
+// elements must not matter -- this is the case that says so, and it is the test
+// any future storage-buffer fat vertex has to keep passing: there, the CPU-side
+// packing and the shader's element layout have to agree byte for byte, and a
+// layout with gaps and mixed widths is where that goes wrong.
+static const char *kGSPadded = R"HLSL(
+struct VSIN  { float3 pos : POSITION0; float2 uv : TEXCOORD0; float4 color : COLOR0; float width : POSITION1; };
+struct VSOUT { float4 Position : SV_POSITION; float2 uv : TEXCOORD0; float4 color : COLOR0; };
+VSOUT v( VSIN x )
+{
+  VSOUT o;
+  o.Position = float4( x.pos, 1 ) + float4( x.uv, 0, 0 ) * 1.0e-6 + x.color * 1.0e-6 + x.width * 1.0e-6;
+  o.uv = x.uv;
+  o.color = x.color;
+  return o;
+}
+[maxvertexcount(3)]
+void g( triangle VSOUT input[3], inout TriangleStream<VSOUT> os )
+{
+  os.Append( input[0] );
+  os.Append( input[1] );
+  os.Append( input[2] );
+}
+float4 p( VSOUT i ) : SV_TARGET { return float4( 1, 0, 1, 1 ); }
+)HLSL";
+
+bool CaseGeomEmulationPaddedLayout()
+{
+  g_currentCase = "geometry shader emulation, padded mixed-type input layout";
+  printf("\n=== 9. %s ===\n", g_currentCase);
+
+  ID3DBlob *vsBlob = nullptr, *gsBlob = nullptr, *psBlob = nullptr;
+  ID3D11VertexShader *vs = nullptr;
+  ID3D11GeometryShader *gs = nullptr;
+  ID3D11PixelShader *ps = nullptr;
+  ID3D11InputLayout *layout = nullptr;
+  ID3D11Buffer *vb = nullptr;
+  Target rt;
+  ID3D11RasterizerState *rs = nullptr;
+
+  bool ok = [&]() -> bool
+  {
+    if (!CompileShader(kGSPadded, "v", "vs_5_0", &vsBlob, "gspad.hlsl")) return false;
+    if (!CompileShader(kGSPadded, "g", "gs_5_0", &gsBlob, "gspad.hlsl")) return false;
+    if (!CompileShader(kGSPadded, "p", "ps_5_0", &psBlob, "gspad.hlsl")) return false;
+
+    if (FAILED(g_device->CreateVertexShader(vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), nullptr, &vs))) return false;
+    if (FAILED(g_device->CreateGeometryShader(gsBlob->GetBufferPointer(), gsBlob->GetBufferSize(), nullptr, &gs)))
+    {
+      printf("  note: no native geometry stage (expected on MoltenVK); the emulator must cover it\n");
+      return false;
+    }
+    if (FAILED(g_device->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(), nullptr, &ps))) return false;
+
+    // Deliberately padded: pos at 0 (12 bytes), a 4-byte gap, uv at 16 (8), color
+    // at 24 (16), width at 40 (4), a 4-byte gap, stride 48.
+    D3D11_INPUT_ELEMENT_DESC decl[4];
+    decl[0].SemanticName = "POSITION"; decl[0].SemanticIndex = 0; decl[0].Format = DXGI_FORMAT_R32G32B32_FLOAT;
+    decl[0].InputSlot = 0; decl[0].AlignedByteOffset = 0; decl[0].InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA; decl[0].InstanceDataStepRate = 0;
+    decl[1].SemanticName = "TEXCOORD"; decl[1].SemanticIndex = 0; decl[1].Format = DXGI_FORMAT_R32G32_FLOAT;
+    decl[1].InputSlot = 0; decl[1].AlignedByteOffset = 16; decl[1].InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA; decl[1].InstanceDataStepRate = 0;
+    decl[2].SemanticName = "COLOR"; decl[2].SemanticIndex = 0; decl[2].Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+    decl[2].InputSlot = 0; decl[2].AlignedByteOffset = 24; decl[2].InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA; decl[2].InstanceDataStepRate = 0;
+    decl[3].SemanticName = "POSITION"; decl[3].SemanticIndex = 1; decl[3].Format = DXGI_FORMAT_R32_FLOAT;
+    decl[3].InputSlot = 0; decl[3].AlignedByteOffset = 40; decl[3].InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA; decl[3].InstanceDataStepRate = 0;
+    if (FAILED(g_device->CreateInputLayout(decl, 4, vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), &layout))) return false;
+
+    const UINT stride = 48;
+    unsigned char verts[3 * 48];
+    memset(verts, 0xCD, sizeof(verts)); // padding stays garbage on purpose
+    const float pos[3][2] = {{-1.0f, -1.0f}, {3.0f, -1.0f}, {-1.0f, 3.0f}};
+    for (int i = 0; i < 3; i++)
+    {
+      unsigned char *v = verts + i * stride;
+      float *f = (float *)v;
+      f[0] = pos[i][0]; f[1] = pos[i][1]; f[2] = 0.0f;      // pos at 0
+      f[4] = 0.5f; f[5] = 0.5f;                              // uv at 16
+      f[6] = 1.0f; f[7] = 1.0f; f[8] = 1.0f; f[9] = 1.0f;    // color at 24
+      f[10] = 2.0f;                                          // width at 40
+    }
+    D3D11_BUFFER_DESC bd;
+    memset(&bd, 0, sizeof(bd));
+    bd.ByteWidth = sizeof(verts);
+    bd.Usage = D3D11_USAGE_IMMUTABLE;
+    bd.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+    D3D11_SUBRESOURCE_DATA sd;
+    memset(&sd, 0, sizeof(sd));
+    sd.pSysMem = verts;
+    if (FAILED(g_device->CreateBuffer(&bd, &sd, &vb)) || !vb) { Fail("CreateBuffer(vertex) failed"); return false; }
+
+    if (!MakeTarget(256, 256, DXGI_FORMAT_R8G8B8A8_UNORM, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE, 0, 1, rt)) return false;
+    rs = MakeRasterizerState();
+    if (!rs) return false;
+
+    const float clear[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+    g_context->ClearRenderTargetView(rt.rtv, clear);
+    g_context->OMSetRenderTargets(1, &rt.rtv, nullptr);
+    SetFullViewport(256);
+    g_context->RSSetState(rs);
+    UINT vbStride = stride, offset = 0;
+    g_context->IASetVertexBuffers(0, 1, &vb, &vbStride, &offset);
+    g_context->IASetInputLayout(layout);
+    g_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    g_context->VSSetShader(vs, nullptr, 0);
+    g_context->GSSetShader(gs, nullptr, 0);
+    g_context->PSSetShader(ps, nullptr, 0);
+    g_context->Draw(3, 0);
+
+    Readback rb;
+    if (!ReadTexture(rt.tex, 0, 256, 256, DXGI_FORMAT_R8G8B8A8_UNORM, rb)) return false;
+    const uint8_t *p = rb.Texel(128, 128);
+    const bool magenta = p[0] > 200 && p[2] > 200 && p[1] < 60;
+    printf("  centre pixel: R=%d G=%d B=%d (expected magenta, stride %u with gaps)\n", p[0], p[1], p[2], stride);
+    if (!magenta) Fail("a padded mixed-type layout did not render: R=%d G=%d B=%d", p[0], p[1], p[2]);
+    if (magenta) Passed();
+    return magenta;
+  }();
+
+  if (ps) ps->Release();
+  if (gs) gs->Release();
+  if (vs) vs->Release();
+  if (layout) layout->Release();
+  if (vb) vb->Release();
+  if (rs) rs->Release();
+  if (psBlob) psBlob->Release();
+  if (gsBlob) gsBlob->Release();
+  if (vsBlob) vsBlob->Release();
+  return ok;
+}
+
 bool CaseGenerateMips()
 {
   g_currentCase = "GenerateMips on a MipLevels=0 MISC_GENERATE_MIPS RT (R8)";
@@ -1629,7 +1760,7 @@ int main(int argc, char **argv)
 
   const bool validation = argc > 1 && !strcmp(argv[1], "--validation");
   // --case=N runs a single case, which is what makes a flaky case debuggable.
-  bool runCase[9] = {false, true, true, true, true, true, true, true, true};
+  bool runCase[10] = {false, true, true, true, true, true, true, true, true, true};
   bool filtered = false;
   for (int i = 1; i < argc; i++)
   {
@@ -1637,14 +1768,14 @@ int main(int argc, char **argv)
     {
       if (!filtered)
       {
-        for (int c = 0; c < 9; c++) runCase[c] = false;
+        for (int c = 0; c < 10; c++) runCase[c] = false;
         filtered = true;
       }
       const char *list = argv[i] + 7;
       while (*list)
       {
         const int n = atoi(list);
-        if (n >= 1 && n <= 8) runCase[n] = true;
+        if (n >= 1 && n <= 9) runCase[n] = true;
         while (*list && *list != ',') list++;
         if (*list == ',') list++;
       }
@@ -1670,7 +1801,7 @@ int main(int argc, char **argv)
   const CaseEntry cases[] = {
       {1, CaseQuad},        {2, CaseCbufferAndRenaming}, {3, CaseStrippedInput}, {4, CaseMrt},
       {5, CaseDepth},       {6, CaseTypelessDepthSrv},   {7, CaseGenerateMips},
-      {8, CaseGeomEmulationWide},
+      {8, CaseGeomEmulationWide}, {9, CaseGeomEmulationPaddedLayout},
   };
   for (auto &c : cases)
     if (runCase[c.index]) c.run();
