@@ -563,6 +563,17 @@ void g( triangle VSOUT input[3], inout TriangleStream<GSOUT> OutputStream )
 }
 )GSSRC";
 
+static const char *kGSPaddedForTranslation = R"GSSRC(
+struct VSIN  { float3 pos : POSITION0; float2 uv : TEXCOORD0; float4 color : COLOR0; float width : POSITION1; };
+struct VSOUT { float4 Position : SV_POSITION; };
+VSOUT v( VSIN x ) { VSOUT o; o.Position = float4(x.pos,1) + x.color*1e-6 + x.width*1e-6; return o; }
+[maxvertexcount(3)]
+void g( triangle VSOUT input[3], inout TriangleStream<VSOUT> os )
+{
+  os.Append(input[0]); os.Append(input[1]); os.Append(input[2]);
+}
+)GSSRC";
+
 static const char *kSequentialOverLimit = R"GSSRC(
 struct VSIN  { float3 Position : POSITION0; };
 struct VSOUT { float4 Position : SV_POSITION; };
@@ -915,6 +926,50 @@ int main()
     // The count itself is exercised through the translation: a shape whose
     // Appends exceed maxvertexcount is refused by AnalyseGeometryShader, and this
     // one is accepted, so the two Appends were seen.
+  }
+
+  // --- the byte-offset fat vertex: what the generated stage reads ----------
+  printf("\ngs_emulation: storage-buffer translation\n");
+  {
+    const phxvk::GeometryShaderInfo shape = phxvk::DescribeGeometryShader(kGSPaddedForTranslation, strlen(kGSPaddedForTranslation), "g");
+    const phxvk::GsProgram gs = phxvk::AnalyseGeometryShader(kGSPaddedForTranslation, "g", "v", shape);
+    Check(gs.ok, "the padded shader analyses cleanly%s%s", gs.ok ? "" : ": ", gs.ok ? "" : gs.reason.c_str());
+
+    // The D3D layout case 9 uses: float3 at 0, a 4-byte hole, float2 at 16,
+    // float4 at 24, float at 40, stride 48.
+    phxvk::VertexInputElement elems[4];
+    snprintf(elems[0].semantic, sizeof elems[0].semantic, "POSITION"); elems[0].semanticIndex = 0; elems[0].offset = 0;  elems[0].components = 3;
+    snprintf(elems[1].semantic, sizeof elems[1].semantic, "TEXCOORD"); elems[1].semanticIndex = 0; elems[1].offset = 16; elems[1].components = 2;
+    snprintf(elems[2].semantic, sizeof elems[2].semantic, "COLOR");    elems[2].semanticIndex = 0; elems[2].offset = 24; elems[2].components = 4;
+    snprintf(elems[3].semantic, sizeof elems[3].semantic, "POSITION"); elems[3].semanticIndex = 1; elems[3].offset = 40; elems[3].components = 1;
+    phxvk::VertexInputLayout layout;
+    layout.elements = elems; layout.count = 4; layout.stride = 48;
+
+    bool usedStorage = false;
+    const std::string text = phxvk::TranslateGeometryShaderToVertex(kGSPaddedForTranslation, gs, "g", "v", "GSEMU_PACKED", &layout, &usedStorage);
+    Check(!text.empty(), "the padded shader translates with a layout");
+    Check(usedStorage, "the translation reports that it uses the storage buffer");
+    auto has = [&](const char *what) {
+      const bool ok = text.find(what) != std::string::npos;
+      Check(ok, "the generated stage contains '%s'", what);
+      return ok;
+    };
+    if (has("ByteAddressBuffer gsemu_fat : register(t100)"))
+    {
+      has("asfloat(gsemu_fat.Load3(0))");    // pos at offset 0, three components
+      has("asfloat(gsemu_fat.Load2(16))");   // uv at 16
+      has("asfloat(gsemu_fat.Load4(24))");   // color at 24
+      has("asfloat(gsemu_fat.Load(40))");    // width at 40
+      // The stride is baked in: three input vertices of 48 bytes each.
+      has("gsemu_vid * 144u");
+    }
+    Check(text.find("gsemu_packed") == std::string::npos, "no vertex attribute struct is left in the byte path");
+
+    // No layout: the attribute path, unchanged.
+    bool attrStorage = true;
+    const std::string attr = phxvk::TranslateGeometryShaderToVertex(kGSPaddedForTranslation, gs, "g", "v", "GSEMU_PACKED", nullptr, &attrStorage);
+    Check(!attr.empty() && !attrStorage, "without a layout the attribute path is used");
+    Check(attr.find("GSEMU_PACKED gsemu_packed") != std::string::npos, "the attribute path still packs the vertex");
   }
 
   if (g_failures) { printf("%d CHECK(S) FAILED\n", g_failures); return g_failures; }

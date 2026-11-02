@@ -762,8 +762,91 @@ std::string SystemValueLocals(const std::string &params, int slots)
   return out;
 }
 
-std::string TranslateGeometryShaderToVertex(const std::string &source, const GsProgram &gs, const char *gsEntry, const char *vertexEntry, const char *packedInputName)
+// Parses `struct <name> { type member : SEMANTICn; ... };` out of the source, so
+// the byte-offset path knows each member's type, name and semantic.  Only the
+// shapes the path supports are accepted: four-component-capable float members
+// whose semantics all appear in the D3D layout.
+namespace
 {
+struct VsMember
+{
+  std::string type;      // float, float2, ...
+  std::string name;
+  std::string semantic;  // "TEXCOORD"
+  unsigned semanticIndex = 0;
+  unsigned components = 0;
+  const VertexInputElement *element = nullptr;
+};
+
+bool ParseStructure(const std::string &source, const char *structName, std::vector<VsMember> &out)
+{
+  const std::string needle = std::string("struct ") + structName;
+  const size_t at = source.find(needle);
+  if (at == std::string::npos) return false;
+  const size_t open = source.find('{', at);
+  const size_t close = source.find('}', open == std::string::npos ? at : open);
+  if (open == std::string::npos || close == std::string::npos) return false;
+
+  std::string body = source.substr(open + 1, close - open - 1);
+  size_t p = 0;
+  while (p < body.size())
+  {
+    const size_t semi = body.find(';', p);
+    if (semi == std::string::npos) break;
+    std::string decl = body.substr(p, semi - p);
+    p = semi + 1;
+    const size_t colon = decl.find(':');
+    if (colon == std::string::npos) continue;
+    std::string left = decl.substr(0, colon), right = decl.substr(colon + 1);
+    // left: "float3 pos", right: "POSITION0"
+    while (!left.empty() && isspace((unsigned char)left.front())) left.erase(left.begin());
+    while (!left.empty() && isspace((unsigned char)left.back())) left.pop_back();
+    const size_t sp = left.find_last_of(" \t\n\r");
+    if (sp == std::string::npos) continue;
+    VsMember m;
+    m.type = left.substr(0, sp);
+    m.name = left.substr(sp + 1);
+    while (!m.name.empty() && isspace((unsigned char)m.name.back())) m.name.pop_back();
+    while (!right.empty() && isspace((unsigned char)right.front())) right.erase(right.begin());
+    while (!right.empty() && isspace((unsigned char)right.back())) right.pop_back();
+    size_t d = right.size();
+    while (d > 0 && isdigit((unsigned char)right[d - 1])) d--;
+    m.semantic = right.substr(0, d);
+    m.semanticIndex = d < right.size() ? (unsigned)atoi(right.c_str() + d) : 0;
+    if (m.type.size() >= 5 && m.type.compare(0, 5, "float") == 0)
+      m.components = m.type.size() == 5 ? 1 : (unsigned)atoi(m.type.c_str() + 5);
+    if (m.components < 1 || m.components > 4) return false;
+    out.push_back(m);
+  }
+  return !out.empty();
+}
+
+// Emits the body of a loader that rebuilds one input vertex from `base` bytes.
+bool EmitByteLoader(std::string &out, const std::vector<VsMember> &members, unsigned stride, const char *structName)
+{
+  for (const VsMember &m : members)
+    if (!m.element || m.element->components != m.components) return false;
+  out += "  " + std::string(structName) + " r;\n";
+  for (const VsMember &m : members)
+  {
+    const unsigned off = m.element->offset;
+    if (off + m.components * 4 > stride) return false;
+    const char *swizzle = m.components == 1 ? "x" : m.components == 2 ? "xy" : m.components == 3 ? "xyz" : "xyzw";
+    if (m.components == 1)
+      out += "  r." + m.name + " = asfloat(gsemu_fat.Load(" + std::to_string(off) + "));\n";
+    else
+      out += "  r." + m.name + " = asfloat(gsemu_fat.Load" + std::to_string(m.components) + "(" +
+             std::to_string(off) + "));\n";
+    (void)swizzle;
+  }
+  out += "  return r;\n";
+  return true;
+}
+} // namespace
+
+std::string TranslateGeometryShaderToVertex(const std::string &source, const GsProgram &gs, const char *gsEntry, const char *vertexEntry, const char *packedInputName, const VertexInputLayout *layout, bool *usedStorageBuffer)
+{
+  if (usedStorageBuffer) *usedStorageBuffer = false;
   if (!gs.ok) return std::string();
 
   std::string gsParams;
@@ -882,14 +965,58 @@ std::string TranslateGeometryShaderToVertex(const std::string &source, const GsP
 
   std::string out;
   out += "\n// ---- geometry shader emulation (src/rhi/gs_emulation.cpp) ----\n";
+  // Two ways to get the input vertices into the stage.  Attributes are exact by
+  // construction (the input assembler does the decoding) but they run out of
+  // locations; a ByteAddressBuffer of the same packed bytes has no limit but the
+  // generated code must load every member at its D3D11 layout offset, which only
+  // works when the layout is 32-bit float elements that the struct names.
+  bool bytePath = false;
+  {
+    std::string loader;
+    std::vector<VsMember> members;
+    if (layout && layout->elements && layout->count && ParseStructure(source, vsInputType.c_str(), members))
+    {
+      bool matched = true;
+      for (VsMember &m : members)
+      {
+        m.element = nullptr;
+        for (unsigned e = 0; e < layout->count; e++)
+          if (layout->elements[e].semanticIndex == m.semanticIndex && m.semantic == layout->elements[e].semantic)
+          {
+            m.element = &layout->elements[e];
+            break;
+          }
+        if (!m.element) { matched = false; break; }
+      }
+      if (matched && EmitByteLoader(loader, members, layout->stride, vsInputType.c_str()))
+      {
+        bytePath = true;
+        out += "ByteAddressBuffer gsemu_fat : register(t100);\n";
+        out += vsInputType + " gsemu_load( int gsemu_base )\n{\n" + loader + "}\n";
+      }
+    }
+  }
+
+  if (bytePath && usedStorageBuffer) *usedStorageBuffer = true;
+
+  const unsigned fatStride = (unsigned)(gs.inputVertices) * (layout ? layout->stride : 0u);
   out += "struct " + std::string(packedInputName) + " { " + vsInputType + " a0;";
   for (int i = 1; i < gs.inputVertices; i++) out += " " + vsInputType + " a" + std::to_string(i) + ";";
   out += " };\n";
 
-  out += outType + " " + gsEntry + "_emu( " + packedInputName + " gsemu_packed, uint gsemu_vid : SV_VertexID )\n{\n";
+  if (bytePath)
+    out += outType + " " + gsEntry + "_emu( uint gsemu_vid : SV_VertexID )\n{\n";
+  else
+    out += outType + " " + gsEntry + "_emu( " + packedInputName + " gsemu_packed, uint gsemu_vid : SV_VertexID )\n{\n";
   out += "  " + stageType + " " + inputName + "[" + std::to_string(gs.inputVertices) + "];\n";
   for (int i = 0; i < gs.inputVertices; i++)
-    out += "  " + inputName + "[" + std::to_string(i) + "] = " + vertexEntry + "( gsemu_packed.a" + std::to_string(i) + " );\n";
+  {
+    if (bytePath)
+      out += "  " + inputName + "[" + std::to_string(i) + "] = " + vertexEntry + "( gsemu_load( (int)( gsemu_vid * " +
+             std::to_string(fatStride) + "u ) + " + std::to_string(i * (layout ? layout->stride : 0u)) + " ) );\n";
+    else
+      out += "  " + inputName + "[" + std::to_string(i) + "] = " + vertexEntry + "( gsemu_packed.a" + std::to_string(i) + " );\n";
+  }
   out += "  const uint gsemu_slot = gsemu_vid % " + std::to_string(gs.slots) + "u;\n";
   out += "  uint gsemu_at = 0u;\n";
   // Geometry shader system-value inputs.  The emulation draws one input

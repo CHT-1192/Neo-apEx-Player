@@ -59,10 +59,39 @@ struct GsProgram
 // `shape` comes from DescribeGeometryShader().
 GsProgram AnalyseGeometryShader(const std::string &source, const char *gsEntry, const char *vertexEntry, const GeometryShaderInfo &shape);
 
+// One element of the D3D11 input layout, as the shim knows it at pipeline
+// creation time.  Only 32-bit float elements are supported by the byte-offset
+// path; anything else falls back to the attribute path.
+struct VertexInputElement
+{
+  char semantic[32] = {0};
+  unsigned semanticIndex = 0;
+  unsigned offset = 0;
+  unsigned components = 0;   // 1..4
+};
+
+struct VertexInputLayout
+{
+  const VertexInputElement *elements = nullptr;
+  unsigned count = 0;
+  unsigned stride = 0;
+};
+
 // Appends a vertex entry point that reproduces the geometry shader, to be
 // compiled as the vertex stage in place of the original vertex entry point.
-// Returns an empty string when the shader cannot be translated.
-std::string TranslateGeometryShaderToVertex(const std::string &source, const GsProgram &gs, const char *gsEntry, const char *vertexEntry, const char *packedInputName);
+//
+// With `layout`, the fat vertex is read from a ByteAddressBuffer at the element
+// offsets above rather than from vertex attributes, which is what makes the
+// emulation independent of the device's attribute limit.  Returns an empty
+// string when the shader cannot be translated either way; the attribute path is
+// used when `layout` is null or when it cannot be expressed as byte loads.
+// `usedStorageBuffer` tells the caller whether the generated stage reads the fat
+// vertex from a storage buffer (bind one, skip the vertex buffer) or from vertex
+// attributes.
+std::string TranslateGeometryShaderToVertex(const std::string &source, const GsProgram &gs, const char *gsEntry,
+                                            const char *vertexEntry, const char *packedInputName,
+                                            const VertexInputLayout *layout = nullptr,
+                                            bool *usedStorageBuffer = nullptr);
 
 // K input vertices per emitted vertex, `slots` emitted vertices per primitive.
 struct FatGeometry
