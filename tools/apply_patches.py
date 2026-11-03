@@ -1602,8 +1602,8 @@ public:
     ),
     (
         "Phoenix/phxSpline.cpp",
-        "  case WAVEFORM_NOISE:\n  {",
-        "  case WAVEFORM_NOISE:\n  {\n    float *NoiseMap = Noise();   // [port] lazily allocated, see phxSpline.h",
+        "  case WAVEFORM_NOISE:\n  {\n    if ( !NoiseCalculated )",
+        "  case WAVEFORM_NOISE:\n  {\n    float *NoiseMap = Noise();   // [port] lazily allocated, see phxSpline.h\n    if ( !NoiseCalculated )",
         "the noise path binds the lazily allocated buffer",
     ),
 ]
