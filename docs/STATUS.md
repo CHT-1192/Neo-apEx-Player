@@ -50,6 +50,43 @@ the same `MVM\0` magic and their header fields decode plausibly (92-190 bpm,
 implementation to read.  The five are listed as `KNOWN_UNLOADABLE` in the
 workflow so the next person does not spend an evening proving the harness works.
 
+## Where the port stands
+
+Working, and verified by something that can fail:
+
+| | verified by |
+| --- | --- |
+| Clean Slate plays, headless and in a window | frame 3724 of 0:31 is byte-identical to the stored baseline |
+| 9 render cases on a real GPU | `phx_smoke` 9/9 |
+| Geometry shader emulation | `phx_gs_test`, plus the demo's own GS frames |
+| XML round-trip, interface, song PCM | `phx_xml_test`, `phx_interface_test`, `phx_song_pcm_test` |
+| Music | the Windows CI renders it with the original synth; 5 of 10 songs work |
+
+Footprint at load is 2.7 GB, all of it the demo's own textures (see "Where the
+memory goes").  A full 1080p export peaks at 11 GB and takes 40 minutes, of which
+roughly 23 are lost to memory compression rather than rendering.  Performance work
+that is not about that growth is parked: at 1080p the frame costs 30.6 ms on the
+GPU and 11 ms on the CPU, texgen runs 0 times per frame during playback, and there
+are 25 draws per frame, so it is fill rate rather than draw count.
+
+Open:
+
+1. **3:00 has no particle cloud** compared with the reference (frame 21600).  The
+   emitters are simulated; which one is live at that moment is unresolved.
+2. The other seven bundled projects have never been compared against their own
+   videos (the videos are not in the repo).
+3. **Linux builds and passes its tests, but nothing has played there** -- it needs a
+   machine with a GPU.
+4. **The fat vertex still travels in vertex attributes**, so a geometry shader
+   needing more attribute locations than the device has is refused.  A
+   `ByteAddressBuffer` version is generated and unit-tested (`phx_gs_test`), but it
+   is not wired: the input layout only exists at pipeline creation, so the context
+   has to re-translate there.  An earlier attempt that shipped the buffer without
+   that step rendered frame 3697 of the demo as garbage and was reverted.
+5. `--fixed-fps` cannot hold 120 fps (9.61 ms against an 8.33 ms budget at 320x180).
+6. Five of the ten shipped `.mvm` files kill the closed-source synth inside
+   `mvxSystem_LoadMusic`, before it can say why.
+
 ## Architecture (decided, do not relitigate)
 
 Reuse the original engine rather than rewriting it:
@@ -1226,33 +1263,51 @@ Recorded because the first version of this note claimed the shim was leaking
 state, and the probe that would have shown it (a scissor of 64x64) took ten
 minutes once it was actually looked at.
 
-## Where the 1.8 GB of memory goes
+## Where the memory goes
 
-`--headless` runs of the demo peak at ~1.84 GB resident. The shim now accounts for
-every allocation and the answer is not a leak:
+Measured with `vmmap` and `heap` on the running player, and with the shim's own
+live accounting (`[mem]` in the logs) rather than by guessing.
 
-    558 images  2444 MB
-    645 buffers  350 MB   (of which 308 MB host-visible, 64 MB of that the ring)
+**At load** the demo needs 2.7 GB of footprint, and almost all of it is its own
+textures:
 
-and the five largest images are each **4096x4096, 13 mips, DXGI format 91,
-`bind = SHADER_RESOURCE|RENDER_TARGET`, `misc = GENERATE_MIPS`** -- 218 MB apiece,
-1.09 GB together.  They are the demo's procedural texture atlases: its own texgen
-filter shader contains `float d = 0.5f / 4096.0f`, so 4096 is baked into the
-content, not chosen by this port.  (The `<texturepage>` entries in the project
-declare `xres`/`yres` in log2 -- 8 to 11, i.e. 256 to 2048 -- and the atlases those
-pages are rendered into are the 4K ones.)
+    559 images  2444 MB      buffers 152  115 MB
 
-So the memory is faithful to the original, and the peak is lower than the total
-allocated because most of it is freed through the deferred list and MoltenVK
-commits lazily.  Two things were worth measuring rather than assuming:
+The five largest are 4096x4096 with 13 mip levels, `bind = SRV|RTV`,
+`misc = GENERATE_MIPS`, 218 MB each.  They are the demo's procedural texture
+atlases: one of its own texgen filters contains `float d = 0.5f / 4096.0f`, and 41
+of the `<Resolution>` entries decode to 4096 px, so the size is the content's
+decision.  A probe that counts shader-resource binds per texture says the mip
+chains are read (38 MB of 555 MB is in textures that are never sampled), so
+trimming them would be guessing.
 
-* the five 4K atlases carry **full mip chains** and ask for mip generation.  That
-  is 25% of their size in levels nobody may sample, but `GENERATE_MIPS` says the
-  engine wants them, and the texgen shaders sample with explicit gradients.
-* 308 MB host-visible is staging, not a cache: it goes through `DeferFree` once
-  the upload has been submitted.
+**The 4.6 GB that looked like a leak was spline padding.**  `heap` named it:
 
-Nothing here is worth changing without the original to compare against.
+    29819 nodes  1465663488 bytes  49152.0  CphxSpline_float16
+
+30,780 live splines at 48 KB each, of which 32 KB is `float NoiseMap[8192]` -- a
+waveform buffer only `WAVEFORM_NOISE` reads.  A backtrace from the constructor
+showed where they come from: every texgen operator parameter slot
+(`CapexTexGenPage::Import`), ~35 per operator over 1,149 operators.  Allocating
+that buffer on first use takes the objects from 49,152 bytes to 64:
+
+    footprint at 8 s   4.1 GB -> 2.7 GB
+    Malloc Small       1.5 GB -> 84 MB
+    total heap         1.63 GB -> 163 MB
+
+**During playback the footprint still climbs.**  A full 34,133-frame run at
+1920x1080 with the video discarded peaks at **11,027 MB** (frame 22,200) and ends
+at 9.6 GB, while resident stays between 300 and 2,600 MB -- most of it compressed.
+The shim's own Vulkan allocations are only ~3.2 GB at that point, so roughly 8 GB
+is outside our accounting (process heap or driver-side).  That growth is also what
+makes a long export slow: frames go from 30 ms to 69 ms once compression starts,
+which is the difference between 17 minutes of rendering and the 40 a full run
+takes.
+
+Two instruments had to be fixed before any of this could be trusted: the totals
+first counted allocations only (an engine churning pooled textures read as a leak),
+and then counted frees at one site only (82 GB of "live" buffers on a 16 GB
+machine).  Every `vkFreeMemory` now notes the free.
 
 ## What the binary is made of, and what shrinking it costs
 
