@@ -1523,15 +1523,19 @@ int main(int argc, char **argv)
       std::vector<uint8_t> pixels;
       UINT width = 0, height = 0;
       std::string err;
-      if (!phxplayer::ReadBackBufferRGB(pixels, &width, &height, &err))
+      // Asynchronous: the copy for this frame is submitted and the frame read is
+      // the one from two frames ago, which the frame fence guarantees complete.
+      // The synchronous path stalled on every frame (Map -> SubmitAndWait).
+      bool haveFrame = false;
+      if (!phxplayer::ReadBackBufferRGBAsync(pixels, &width, &height, &haveFrame) || !haveFrame)
       {
-        phxvk::LogError("--raw-video: %s", err.c_str());
-        break;
+        // The first two frames only submit; nothing is complete yet.
+        continue;
       }
       if (!opt.rawVideoHeaderDone)
       {
         // stderr, so the pipe stays pure pixels.
-        fprintf(stderr, "#rawvideo rgb24 %ux%u fps %.6f frames %lld\n", width, height,
+        fprintf(stderr, "#rawvideo bgra %ux%u fps %.6f frames %lld\n", width, height,
                 (double)Project.Timeline->Timeline->FrameRate, (long long)opt.frames);
         fflush(stderr);
         opt.rawVideoHeaderDone = true;
@@ -1565,7 +1569,19 @@ int main(int argc, char **argv)
       mach_task_basic_info info;
       mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
       if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, (task_info_t)&info, &count) == KERN_SUCCESS)
-        phxvk::LogInfo("[rss] frame %lld: %.0f MB", (long long)clock.Frame(), info.resident_size / 1048576.0);
+      {
+        // The same figure Activity Monitor's Memory column shows: phys_footprint,
+        // i.e. dirty + compressed + IOKit/GPU mappings, not just resident.
+        task_vm_info_data_t vm;
+        mach_msg_type_number_t vmCount = TASK_VM_INFO_COUNT;
+        double footprintMb = 0.0;
+        if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&vm, &vmCount) == KERN_SUCCESS)
+          footprintMb = vm.phys_footprint / 1048576.0;
+        static double peakMb = 0.0;
+        if (footprintMb > peakMb) peakMb = footprintMb;
+        phxvk::LogInfo("[mem] frame %lld: footprint %.0f MB (peak %.0f), resident %.0f MB",
+                       (long long)clock.Frame(), footprintMb, peakMb, info.resident_size / 1048576.0);
+      }
     }
     if (opt.maxRssMb > 0)
     {

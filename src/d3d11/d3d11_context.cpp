@@ -2867,7 +2867,10 @@ HRESULT ContextImpl::Map(ID3D11Resource *pResource, UINT Subresource, D3D11_MAP 
   const uint32_t mips = tex->mipLevels ? tex->mipLevels : 1;
   const uint32_t layer = Subresource / mips;
   const uint64_t offset = (uint64_t)layer * tex->stagingRowPitch * tex->height;
-  void *mapped = MapStagingMemoryRange(tex->stagingMemory, offset, tex->stagingSize - offset);
+  // The video readback maps the staging buffer once and keeps the pointer, so a
+  // second vkMapMemory would fail; use the existing mapping when there is one.
+  void *mapped = tex->stagingMapped ? (void *)((uint8_t *)tex->stagingMapped + offset)
+                                    : MapStagingMemoryRange(tex->stagingMemory, offset, tex->stagingSize - offset);
   if (!mapped)
   {
     phxvk::LogError("Map: vkMapMemory on the staging texture failed");

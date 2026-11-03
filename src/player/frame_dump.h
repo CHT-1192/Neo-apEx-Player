@@ -27,6 +27,10 @@ bool ReadBackBufferRGB(std::vector<uint8_t> &out, UINT *width, UINT *height, std
 // than the requested frame size is not a limit.  The engine reads the back-buffer
 // view either way; this only changes what the *dump* reads.
 void SetOffscreenBackBuffer(ID3D11Texture2D *texture);
+
+// Non-blocking variant for video export: returns true when the call succeeded and
+// sets *haveFrame when a completed frame was copied out.
+bool ReadBackBufferRGBAsync(std::vector<uint8_t> &out, UINT *width, UINT *height, bool *haveFrame);
 bool ReadTextureRGB24(ID3D11Texture2D *texture, std::vector<uint8_t> &out, UINT *width, UINT *height,
                       std::string *error);
 

@@ -96,6 +96,11 @@ ID3D11ShaderReflection *CreateReflection(const ShaderReflectionRecord &rec, cons
 
 // Live-object bookkeeping for ID3D11Debug.
 void TrackObjectCreated(const char *kind, void *object);
+
+// Maps a staging texture's memory once and returns the host pointer plus its row
+// pitch.  The caller is responsible for not reading a copy the GPU may still be
+// writing; see the async readback in frame_dump.cpp.
+void *StagingHostPointer(ID3D11Texture2D *texture, unsigned *rowPitch);
 void TrackObjectDestroyed(const char *kind, void *object);
 void ReportLiveObjects(bool detail);
 
@@ -249,6 +254,10 @@ struct TextureImpl
   // ever Map()s or CopyResource()s into them, and MoltenVK cannot map a
   // linear VkImage, so a buffer is both cheaper and portable.
   VkBuffer staging = VK_NULL_HANDLE;
+  // Host pointer to the staging buffer, mapped once.  A readback that maps it per
+  // frame has to wait for the GPU (Map -> SubmitAndWait), which serialises the
+  // whole pipeline; reading a copy that is two frames old does not need to wait.
+  void *stagingMapped = nullptr;
   VkDeviceMemory stagingMemory = VK_NULL_HANDLE;
   uint64_t stagingSize = 0;
   UINT stagingRowPitch = 0;

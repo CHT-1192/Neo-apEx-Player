@@ -1,6 +1,7 @@
 #include "frame_dump.h"
 
 #include "rhi/vk_core.h"
+#include "d3d11/d3d11_internal.h"
 
 #include "DX11Device.h"
 #include "phxEngine.h"
@@ -266,6 +267,104 @@ bool DumpBackBufferToPPM(const char *path, std::string *error)
   bool ok = DumpTextureToPPM(back, path, error);
   back->Release();
   return ok;
+}
+
+} // namespace phxplayer
+
+namespace phxplayer
+{
+
+// Asynchronous readback for video export.
+//
+// The synchronous path copies into a staging texture and then maps it, and Map
+// waits for the GPU (ContextImpl::Map -> SubmitAndWait), so every frame stalls:
+// the CPU waits for the render and then copies while the GPU idles.  That is the
+// 69 ms/frame at 1080p against ~15 ms of actual rendering.
+//
+// Three staging textures, read the one from two frames ago: FrameBegin waits the
+// fence of the slot that frame used, so when frame N is being recorded, frame
+// N-2's copy has completed and reading it needs no wait at all.
+namespace
+{
+struct AsyncReadback
+{
+  static const int kRing = 3;
+  ID3D11Texture2D *staging[kRing] = {};
+  void *mapped[kRing] = {};
+  unsigned rowPitch[kRing] = {};
+  unsigned width = 0, height = 0;
+  int next = 0;
+  int submitted = 0;
+};
+AsyncReadback g_async;
+} // namespace
+
+bool ReadBackBufferRGBAsync(std::vector<uint8_t> &out, UINT *width, UINT *height, bool *haveFrame)
+{
+  if (haveFrame) *haveFrame = false;
+
+  ID3D11Texture2D *back = g_offscreenBackBuffer;
+  if (back)
+  {
+    back->AddRef();
+  }
+  else
+  {
+    if (!SwapChain) return false;
+    if (FAILED(SwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), (void **)&back)) || !back) return false;
+  }
+
+  D3D11_TEXTURE2D_DESC desc;
+  back->GetDesc(&desc);
+  if (g_async.width != desc.Width || g_async.height != desc.Height)
+  {
+    for (int i = 0; i < AsyncReadback::kRing; i++)
+      if (g_async.staging[i]) { g_async.staging[i]->Release(); g_async.staging[i] = nullptr; }
+    D3D11_TEXTURE2D_DESC sdesc = desc;
+    sdesc.Usage = D3D11_USAGE_STAGING;
+    sdesc.BindFlags = 0;
+    sdesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    sdesc.MiscFlags = 0;
+    sdesc.MipLevels = 1;
+    sdesc.ArraySize = 1;
+    for (int i = 0; i < AsyncReadback::kRing; i++)
+    {
+      if (FAILED(phxDev->CreateTexture2D(&sdesc, nullptr, &g_async.staging[i])) || !g_async.staging[i])
+      {
+        back->Release();
+        return false;
+      }
+      g_async.mapped[i] = phxd3d11::StagingHostPointer(g_async.staging[i], &g_async.rowPitch[i]);
+    }
+    g_async.width = desc.Width;
+    g_async.height = desc.Height;
+    g_async.next = 0;
+    g_async.submitted = 0;
+  }
+
+  // Submit this frame's copy, then read the slot filled two frames ago.
+  const int cur = g_async.next;
+  phxContext->CopyResource(g_async.staging[cur], back);
+  back->Release();
+  g_async.next = (cur + 1) % AsyncReadback::kRing;
+  g_async.submitted++;
+  if (g_async.submitted <= 2) return true; // nothing has completed yet
+
+  const int read = (cur + 1) % AsyncReadback::kRing; // == (cur - 2) mod 3
+  if (!g_async.mapped[read]) return false;
+
+  // BGRA straight through: the frame is already in that order, and converting it
+  // here cost ~2000000 iterations per frame at 1080p.  ffmpeg reads bgra with
+  // -pix_fmt bgra, so the export does a row copy and nothing else.
+  const size_t rowBytes = (size_t)g_async.width * 4;
+  out.resize(rowBytes * g_async.height);
+  const unsigned char *src = (const unsigned char *)g_async.mapped[read];
+  for (unsigned y = 0; y < g_async.height; y++)
+    memcpy(out.data() + (size_t)y * rowBytes, src + (size_t)y * g_async.rowPitch[read], rowBytes);
+  if (width) *width = g_async.width;
+  if (height) *height = g_async.height;
+  if (haveFrame) *haveFrame = true;
+  return true;
 }
 
 } // namespace phxplayer

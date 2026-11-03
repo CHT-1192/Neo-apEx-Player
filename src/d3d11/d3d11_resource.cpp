@@ -222,6 +222,7 @@ static std::vector<TextureImpl *> g_liveTextures;
 // measures which chains are never bound as a shader resource instead of guessing
 // which levels a shader touches.
 
+
 void ReleaseTexture(TextureImpl &tex)
 {
   phxvk::Device &d = phxvk::Vk();
@@ -258,6 +259,17 @@ void ReleaseTexture(TextureImpl &tex)
 }
 
 } // namespace
+
+void *StagingHostPointer(ID3D11Texture2D *texture, unsigned *rowPitch)
+{
+  if (!texture) return nullptr;
+  auto *impl = static_cast<Texture2DImpl *>(texture);
+  if (impl->tex.stagingMapped == nullptr && impl->tex.stagingMemory != VK_NULL_HANDLE)
+    vkMapMemory(phxvk::Vk().device, impl->tex.stagingMemory, 0, VK_WHOLE_SIZE, 0, &impl->tex.stagingMapped);
+  if (rowPitch) *rowPitch = impl->tex.stagingRowPitch;
+  return impl->tex.stagingMapped;
+}
+
 void PrintMipWaste()
 {
   unsigned long long wasted = 0, totalChainWaste = 0;
@@ -540,6 +552,8 @@ HRESULT CreateTextureCommon(DeviceImpl *device, TextureImpl *tex, VkImageType ty
     tex->staging = phxvk::CreateBuffer(tex->stagingSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &tex->stagingMemory);
     if (!tex->staging) return E_FAIL;
+    if (vkMapMemory(phxvk::Vk().device, tex->stagingMemory, 0, VK_WHOLE_SIZE, 0, &tex->stagingMapped) != VK_SUCCESS)
+      tex->stagingMapped = nullptr;
     return S_OK;
   }
 
