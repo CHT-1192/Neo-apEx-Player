@@ -81,6 +81,10 @@ void vkShutdown();
 // Totals for every image and buffer the shim has allocated, largest first.
 void PrintMemoryStats();
 
+// Every vkFreeMemory in this shim must be followed by this, or the live totals
+// keep counting memory that is gone (measured: 82 GB of "live" buffers).
+void NoteMemoryFreed(VkDeviceMemory memory);
+
 // Off-screen rendering presents nothing: skip the swap-chain acquire and present.
 void vkSetSkipPresent(bool skip);
 bool vkSkipPresentEnabled();
@@ -99,6 +103,10 @@ void PrintFrameStats();
 // The first version of this only counted allocations, which reads as a leak when
 // the engine is churning through pooled textures exactly as it should.
 void PrintMemoryStats();
+
+// Every vkFreeMemory in this shim must be followed by this, or the live totals
+// keep counting memory that is gone (measured: 82 GB of "live" buffers).
+void NoteMemoryFreed(VkDeviceMemory memory);
 
 // Off-screen rendering presents nothing: skip the swap-chain acquire and present.
 void vkSetSkipPresent(bool skip);

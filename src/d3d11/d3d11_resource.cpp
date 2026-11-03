@@ -234,6 +234,7 @@ void ReleaseTexture(TextureImpl &tex)
   if (tex.stagingMemory != VK_NULL_HANDLE)
   {
     vkFreeMemory(d.device, tex.stagingMemory, nullptr);
+    phxvk::NoteMemoryFreed(tex.stagingMemory);
     tex.stagingMemory = VK_NULL_HANDLE;
   }
   for (size_t i = 0; i < g_liveTextures.size(); i++)

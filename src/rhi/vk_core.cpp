@@ -12,7 +12,6 @@ namespace phxvk
 {
 // Defined with the accounting block below; declared here because the deferred-free
 // paths that call it are above it.
-static void NoteMemoryFreed(VkDeviceMemory memory);
 // Outside the anonymous namespace below: the tests call it, so it needs
 // external linkage.  Kept as a copy because vkShutdown() clears the properties
 // it comes from, and the summaries are printed after shutting down.
@@ -473,14 +472,14 @@ void vkShutdown()
     {
       vkDestroyBuffer(d.device, p.first, nullptr);
       vkFreeMemory(d.device, p.second, nullptr);
-      NoteMemoryFreed(p.second);
+      phxvk::NoteMemoryFreed(p.second);
     }
     d.deferredFree[slot].clear();
     for (auto &p : d.deferredFreeImages[slot])
     {
       vkDestroyImage(d.device, p.first, nullptr);
       vkFreeMemory(d.device, p.second, nullptr);
-      NoteMemoryFreed(p.second);
+      phxvk::NoteMemoryFreed(p.second);
     }
     d.deferredFreeImages[slot].clear();
     for (VkImageView v : d.deferredFreeViews[slot]) vkDestroyImageView(d.device, v, nullptr);
@@ -564,8 +563,9 @@ struct MemStats
 };
 MemStats g_memStats;
 
-static void NoteMemoryFreed(VkDeviceMemory memory) { g_memStats.Release(memory); }
 } // namespace
+
+void NoteMemoryFreed(VkDeviceMemory memory) { g_memStats.Release(memory); }
 
 // Which call site created a buffer, so a growth can be attributed rather than
 // guessed at.
@@ -733,6 +733,7 @@ static void FlushDeferred(Device &d, int slot)
   {
     vkDestroyBuffer(d.device, p.first, nullptr);
     vkFreeMemory(d.device, p.second, nullptr);
+    phxvk::NoteMemoryFreed(p.second);
   }
   d.deferredFree[slot].clear();
   for (auto &p : d.deferredFreeImages[slot])
