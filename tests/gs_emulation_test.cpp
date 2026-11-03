@@ -954,7 +954,7 @@ int main()
       Check(ok, "the generated stage contains '%s'", what);
       return ok;
     };
-    if (has("ByteAddressBuffer gsemu_fat : register(t100)"))
+    if (has("ByteAddressBuffer gsemu_fat : register(u60)"))
     {
       has("asfloat(gsemu_fat.Load3(0))");    // pos at offset 0, three components
       has("asfloat(gsemu_fat.Load2(16))");   // uv at 16

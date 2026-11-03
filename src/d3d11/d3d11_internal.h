@@ -82,6 +82,12 @@ struct EmulatedGeometryShader
 {
   std::vector<uint32_t> vertexSpirv;
   phxvk::GsProgram program;
+  // The preprocessed HLSL and the entry point names are kept so the stage can be
+  // translated again at pipeline creation, which is the first place the input
+  // layout exists -- and the byte-offset fat vertex needs the element offsets.
+  std::string source;
+  std::string gsEntry = "g";
+  std::string vertexEntry = "v";
 };
 void RegisterEmulatedGeometryShader(const void *gsSpirv, size_t gsSize, const EmulatedGeometryShader &emu);
 bool LookupEmulatedGeometryShader(const void *gsSpirv, size_t gsSize, EmulatedGeometryShader *out);
@@ -716,8 +722,14 @@ struct ContextImpl : public ID3D11DeviceContext, public ObjectBase
   const EmulatedGeometryShader *emulationPlan = nullptr;
   bool emulatedPipeline = false;
   ID3D11VertexShader *EmulatedVertexShaderFor(const ShaderCommon *gs);
+  ID3D11VertexShader *EmulatedVertexShaderForLayout(const EmulatedGeometryShader *plan, InputLayoutImpl *il,
+                                                   bool *usedStorage);
   const EmulatedGeometryShader *EmulationPlanFor(const ShaderCommon *gs) const;
   std::unordered_map<uint64_t, ID3D11VertexShader *> emulatedVertexShaders;
+  // The byte-offset variant, keyed by shader and layout: it exists only for the
+  // input layouts that can be expressed as 32-bit float element loads.
+  std::unordered_map<uint64_t, ID3D11VertexShader *> emulatedVertexShadersByLayout;
+  bool emulationUsesStorage = false;
 
   // The fat geometry for one draw, built once.  The engine's mesh buffers are
   // built at load time and never change, so the expansion is stable across

@@ -1121,6 +1121,22 @@ const EmulatedGeometryShader *ContextImpl::EmulationPlanFor(const ShaderCommon *
 }
 
 // Creates (once per geometry shader) the vertex stage that replaces it.
+
+// Components of the 32-bit float formats the byte-offset path supports.  Anything
+// else (halfs, packed formats) falls back to vertex attributes, which decode
+// exactly whatever the input assembler would have.
+static unsigned FloatComponents(DXGI_FORMAT format)
+{
+  switch (format)
+  {
+  case DXGI_FORMAT_R32_FLOAT: return 1;
+  case DXGI_FORMAT_R32G32_FLOAT: return 2;
+  case DXGI_FORMAT_R32G32B32_FLOAT: return 3;
+  case DXGI_FORMAT_R32G32B32A32_FLOAT: return 4;
+  default: return 0;
+  }
+}
+
 ID3D11VertexShader *ContextImpl::EmulatedVertexShaderFor(const ShaderCommon *gs)
 {
   const EmulatedGeometryShader *plan = EmulationPlanFor(gs);
@@ -1136,6 +1152,105 @@ ID3D11VertexShader *ContextImpl::EmulatedVertexShaderFor(const ShaderCommon *gs)
     return nullptr;
   }
   emulatedVertexShaders[gs->contentHash] = vs;
+  return vs;
+}
+
+
+// Translates the emulated stage again with the D3D11 input layout in hand, so its
+// input vertices come from a ByteAddressBuffer at the element offsets instead of
+// from vertex attributes.  Returns nullptr -- and the attribute version is used --
+// when the layout cannot be expressed that way.
+ID3D11VertexShader *ContextImpl::EmulatedVertexShaderForLayout(const EmulatedGeometryShader *plan,
+                                                               InputLayoutImpl *il, bool *usedStorage)
+{
+  if (usedStorage) *usedStorage = false;
+  if (!plan || !il || plan->source.empty() || !device)
+  {
+    static int once = 0;
+    if (once++ < 2)
+      phxvk::LogInfo("[gs-bytes] skipped: plan=%d il=%d source=%zu device=%d", plan != nullptr, il != nullptr,
+                     plan ? plan->source.size() : 0, device != nullptr);
+    return nullptr;
+  }
+
+  std::vector<phxvk::VertexInputElement> elems;
+  unsigned stride = 0;
+  for (const D3D11_INPUT_ELEMENT_DESC &e : il->elements)
+  {
+    unsigned components = FloatComponents(e.Format);
+    phxvk::VertexElementKind kind = phxvk::VertexElementKind::Float;
+    if (!components && e.Format == DXGI_FORMAT_R8G8B8A8_UNORM)
+    {
+      components = 4;
+      kind = phxvk::VertexElementKind::UNorm8x4;
+    }
+    if (!components)
+    {
+      static std::set<int> seen;
+      if (seen.insert((int)e.Format).second)
+      {
+        phxvk::LogInfo("[gs-bytes] unsupported element format %d (semantic %s)", (int)e.Format,
+                       e.SemanticName ? e.SemanticName : "?");
+      }
+      return nullptr;
+    }
+    phxvk::VertexInputElement v{};
+    snprintf(v.semantic, sizeof v.semantic, "%s", e.SemanticName ? e.SemanticName : "");
+    v.semanticIndex = e.SemanticIndex;
+    v.offset = e.AlignedByteOffset;
+    v.components = components;
+    v.kind = kind;
+    elems.push_back(v);
+    const unsigned bytes = (kind == phxvk::VertexElementKind::UNorm8x4) ? 4 : components * 4;
+    stride = std::max<unsigned>(stride, e.AlignedByteOffset + bytes);
+  }
+  if (elems.empty() || stride == 0) return nullptr;
+
+  const uint64_t key = plan->program.restartsAfter.size() * 1000003ull ^
+                       ((uint64_t)stride << 32) ^ (uint64_t)elems.size();
+  auto it = emulatedVertexShadersByLayout.find(key);
+  if (it != emulatedVertexShadersByLayout.end())
+  {
+    if (usedStorage) *usedStorage = true;
+    return it->second;
+  }
+
+  phxvk::VertexInputLayout layout;
+  layout.elements = elems.data();
+  layout.count = (unsigned)elems.size();
+  layout.stride = stride;
+
+  bool used = false;
+  const std::string extra = phxvk::TranslateGeometryShaderToVertex(
+      plan->source, plan->program, plan->gsEntry.c_str(), plan->vertexEntry.c_str(), "GSEMU_PACKED", &layout, &used);
+  if (extra.empty() || !used) return nullptr;
+
+  const std::string combined = plan->source + extra;
+  const std::string emuEntry = plan->gsEntry + "_emu";
+  const phxvk::CompiledShader emu = phxvk::CompileHLSL(combined.c_str(), combined.size(), emuEntry.c_str(),
+                                                       phxvk::ShaderStage::Vertex, "gs-emu/vs_5_0 (byte offsets)");
+  if (!emu.ok)
+  {
+    phxvk::LogWarn("[d3d11] byte-offset emulated stage did not compile, keeping vertex attributes: %s",
+                   emu.error.c_str());
+    return nullptr;
+  }
+
+  ID3D11VertexShader *vs = nullptr;
+  if (FAILED(device->CreateVertexShader(emu.spirv.data(), emu.spirv.size() * sizeof(uint32_t), nullptr, &vs)) || !vs)
+  {
+    phxvk::LogWarn("[d3d11] could not create the byte-offset emulated stage; keeping vertex attributes");
+    return nullptr;
+  }
+  emulatedVertexShadersByLayout[key] = vs;
+  {
+    std::string shape;
+    for (const phxvk::VertexInputElement &v : elems)
+      shape += " " + std::string(v.semantic) + std::to_string(v.semanticIndex) + "@" + std::to_string(v.offset) +
+               "/" + std::to_string(v.components);
+    phxvk::LogInfo("[d3d11] storage fat vertex (%u byte stride, bound %u):%s", stride, vertexStrides[0], shape.c_str());
+  }
+  if (usedStorage) *usedStorage = true;
   return vs;
 }
 
@@ -1164,7 +1279,24 @@ bool ContextImpl::PrepareDraw(VkPipeline *outPipeline, VkPipelineLayout *outLayo
   if (stages[kStageGS].shader && phxvk::Vk().features.geometryShader == VK_FALSE)
   {
     const EmulatedGeometryShader *plan = EmulationPlanFor(stages[kStageGS].shader);
-    ID3D11VertexShader *emuVs = plan ? EmulatedVertexShaderFor(stages[kStageGS].shader) : nullptr;
+    // Prefer the byte-offset stage: it removes the device's attribute limit.  It
+    // needs the input layout, which only exists here, so the translation happens
+    // at pipeline creation rather than at D3DCompile time.
+    emulationUsesStorage = false;
+    ID3D11VertexShader *emuVs = nullptr;
+    {
+      static int once = 0;
+      if (once++ < 3)
+        phxvk::LogInfo("[gs-bytes] entry: plan=%d il=%d src=%zu", plan != nullptr, inputLayout != nullptr,
+                       plan ? plan->source.size() : 0);
+    }
+    // Off by default until it renders the demo correctly: the attribute path is
+    // exact by construction, and this one is still being brought up.
+    static const bool bytePathEnabled = getenv("APEX_GS_BYTES") != nullptr;
+    if (plan && inputLayout && bytePathEnabled)
+      emuVs = EmulatedVertexShaderForLayout(plan, static_cast<InputLayoutImpl *>(inputLayout), &emulationUsesStorage);
+    if (!emuVs)
+      emuVs = plan ? EmulatedVertexShaderFor(stages[kStageGS].shader) : nullptr;
     // The fat vertex repeats the input layout once per input vertex, so the
     // emulated stage can need more vertex attributes than the device has.  The
     // emulated stage declares the original vertex input struct once per input
@@ -1375,7 +1507,12 @@ bool ContextImpl::PrepareDraw(VkPipeline *outPipeline, VkPipelineLayout *outLayo
       }
   }
 
-  if (il)
+  {
+    static int dbgTrue = 0;
+    if (emulationUsesStorage && dbgTrue++ < 5)
+      phxvk::LogInfo("[gs-bytes] pipeline USING STORAGE (il=%d)", il != nullptr);
+  }
+  if (il && !emulationUsesStorage)
   {
     for (UINT rep = 0; rep < reps; rep++)
     for (UINT i = 0; i < il->elements.size(); i++)
@@ -2145,7 +2282,10 @@ bool ContextImpl::DrawInternal(bool indexed, UINT count, UINT instanceCount, UIN
 
       EmulatedGeometry entry;
       phxvk::NoteBufferKind(6);
-      entry.vbo = phxvk::CreateBuffer(fat.vertices.size(), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+      entry.vbo = phxvk::CreateBuffer(fat.vertices.size(),
+                                      (emulationUsesStorage ? VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
+                                                            : VK_BUFFER_USAGE_VERTEX_BUFFER_BIT) |
+                                          VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &entry.vboMemory);
       entry.ibo = phxvk::CreateBuffer(fat.indices.size() * sizeof(uint32_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &entry.iboMemory);
@@ -2190,6 +2330,22 @@ bool ContextImpl::DrawInternal(bool indexed, UINT count, UINT instanceCount, UIN
   if (set == VK_NULL_HANDLE) return false;
   std::vector<uint32_t> dynamicOffsets;
   if (!WriteDescriptorSet(set, bindings, dynamicOffsets)) return false;
+  if (emulationUsesStorage && emuVb != VK_NULL_HANDLE)
+  {
+    // The generated stage reads the fat vertex from `ByteAddressBuffer
+    // gsemu_fat : register(t100)`; register t100 maps to this binding.
+    VkDescriptorBufferInfo info{};
+    info.buffer = emuVb;
+    info.offset = 0;
+    info.range = VK_WHOLE_SIZE;
+    VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    write.dstSet = set;
+    write.dstBinding = phxvk::kBindingUAV + 60;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    write.pBufferInfo = &info;
+    vkUpdateDescriptorSets(phxvk::Vk().device, 1, &write, 0, nullptr);
+  }
   vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &set, (uint32_t)dynamicOffsets.size(), dynamicOffsets.empty() ? nullptr : dynamicOffsets.data());
 
   // Vertex buffers: only the slots the pipeline actually consumes matter, but
@@ -2198,8 +2354,9 @@ bool ContextImpl::DrawInternal(bool indexed, UINT count, UINT instanceCount, UIN
   {
     if (emuVb != VK_NULL_HANDLE)
     {
-      // The fat buffer replaces every slot of the original geometry.
-      if (i == 0) vkCmdBindVertexBuffers(cmd, 0, 1, &emuVb, &emuVbOffset);
+      // The fat buffer replaces every slot of the original geometry: as a vertex
+      // buffer normally, or as the storage buffer the generated stage reads.
+      if (i == 0 && !emulationUsesStorage) vkCmdBindVertexBuffers(cmd, 0, 1, &emuVb, &emuVbOffset);
       continue;
     }
     if (!vertexBuffers[i]) continue;

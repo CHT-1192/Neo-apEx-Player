@@ -202,6 +202,9 @@ HRESULT CompileCommon(LPCVOID pSrcData, SIZE_T SrcDataSize, const D3D_SHADER_MAC
       EmulatedGeometryShader entry;
       entry.vertexSpirv = emu.spirv;
       entry.program = gs;
+      entry.source = gsSource;
+      entry.gsEntry = pEntrypoint;
+      entry.vertexEntry = "v";
       RegisterEmulatedGeometryShader(emu.spirv.data(), emu.spirv.size() * sizeof(uint32_t), entry);
 
       static int logged = 0;

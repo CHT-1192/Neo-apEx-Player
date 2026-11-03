@@ -62,12 +62,22 @@ GsProgram AnalyseGeometryShader(const std::string &source, const char *gsEntry, 
 // One element of the D3D11 input layout, as the shim knows it at pipeline
 // creation time.  Only 32-bit float elements are supported by the byte-offset
 // path; anything else falls back to the attribute path.
+// How the element's bytes have to be turned back into the shader's float4.  The
+// byte-offset path reads raw memory, so it must reproduce what the input
+// assembler would have done for each format.
+enum class VertexElementKind
+{
+  Float,        // R32_FLOAT .. R32G32B32A32_FLOAT, straight `asfloat`
+  UNorm8x4,     // R8G8B8A8_UNORM, the usual vertex colour
+};
+
 struct VertexInputElement
 {
   char semantic[32] = {0};
   unsigned semanticIndex = 0;
   unsigned offset = 0;
   unsigned components = 0;   // 1..4
+  VertexElementKind kind = VertexElementKind::Float;
 };
 
 struct VertexInputLayout

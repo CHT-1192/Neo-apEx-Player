@@ -3,9 +3,11 @@
 // See src/rhi/gs_emulation.h for what this is and why it exists.
 
 #include "gs_emulation.h"
+#include "vk_core.h"   // logging
 
 #include <cctype>
 #include <cstring>
+#include <strings.h>   // strcasecmp
 
 namespace phxvk
 {
@@ -830,6 +832,16 @@ bool EmitByteLoader(std::string &out, const std::vector<VsMember> &members, unsi
   for (const VsMember &m : members)
   {
     const unsigned off = m.element->offset;
+    if (m.element->kind == VertexElementKind::UNorm8x4)
+    {
+      if (m.components != 4 || off + 4 > stride) return false;
+      // R8G8B8A8_UNORM is four bytes, one per channel, little endian; the input
+      // assembler would have divided by 255 and the shader expects the same.
+      out += "  { uint gsemu_c = gsemu_fat.Load(" + std::to_string(off) + ");\n";
+      out += "    r." + m.name + " = float4( (gsemu_c & 255u) / 255.0, ((gsemu_c >> 8) & 255u) / 255.0,"
+             " ((gsemu_c >> 16) & 255u) / 255.0, ((gsemu_c >> 24) & 255u) / 255.0 ); }\n";
+      continue;
+    }
     if (off + m.components * 4 > stride) return false;
     const char *swizzle = m.components == 1 ? "x" : m.components == 2 ? "xy" : m.components == 3 ? "xyz" : "xyzw";
     if (m.components == 1)
@@ -981,17 +993,36 @@ std::string TranslateGeometryShaderToVertex(const std::string &source, const GsP
       {
         m.element = nullptr;
         for (unsigned e = 0; e < layout->count; e++)
-          if (layout->elements[e].semanticIndex == m.semanticIndex && m.semantic == layout->elements[e].semantic)
+          // Semantics are case-insensitive in D3D: the layout says Position0, the
+          // shader says POSITION0, and they are the same input.
+          if (layout->elements[e].semanticIndex == m.semanticIndex &&
+              strcasecmp(m.semantic.c_str(), layout->elements[e].semantic) == 0)
           {
             m.element = &layout->elements[e];
             break;
           }
-        if (!m.element) { matched = false; break; }
+        if (!m.element)
+        {
+          static int once = 0;
+          if (once++ < 4)
+          {
+            std::string listed;
+            for (unsigned e = 0; e < layout->count; e++)
+              listed += std::string(" ") + layout->elements[e].semantic + std::to_string(layout->elements[e].semanticIndex);
+            phxvk::LogInfo("[gs-bytes] member '%s %s%d' has no element; layout has:%s", m.type.c_str(),
+                           m.semantic.c_str(), (int)m.semanticIndex, listed.c_str());
+          }
+          matched = false;
+          break;
+        }
       }
-      if (matched && EmitByteLoader(loader, members, layout->stride, vsInputType.c_str()))
+      const bool emitted = matched && EmitByteLoader(loader, members, layout->stride, vsInputType.c_str());
+      if (emitted)
       {
         bytePath = true;
-        out += "ByteAddressBuffer gsemu_fat : register(t100);\n";
+        // u60, not t100: bindings in the texture range are laid out as sampled
+        // images, and a storage buffer written into one renders garbage.
+        out += "ByteAddressBuffer gsemu_fat : register(u60);\n";
         out += vsInputType + " gsemu_load( int gsemu_base )\n{\n" + loader + "}\n";
       }
     }
