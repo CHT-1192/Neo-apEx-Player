@@ -2112,7 +2112,24 @@ bool ContextImpl::DrawInternal(bool indexed, UINT count, UINT instanceCount, UIN
     auto cached = emulatedGeometryCache.find(cacheKey);
     if (cached == emulatedGeometryCache.end())
     {
+      const uint64_t entryBytes = fat.vertices.size() + fat.indices.size() * sizeof(uint32_t);
+      if (emulatedGeometryCacheBytes + entryBytes > kEmulatedGeometryCacheBytes)
+      {
+        uint64_t freed = 0;
+        for (auto &e : emulatedGeometryCache)
+        {
+          if (e.second.vbo) phxvk::DeferFree(e.second.vbo, e.second.vboMemory);
+          if (e.second.ibo) phxvk::DeferFree(e.second.ibo, e.second.iboMemory);
+          freed += e.second.bytes;
+        }
+        emulatedGeometryCache.clear();
+        emulatedGeometryCacheBytes = 0;
+        phxvk::LogInfo("[d3d11] emulated geometry cache: released %.1f MB, it was at its %llu MB limit",
+                       freed / 1048576.0, (unsigned long long)(kEmulatedGeometryCacheBytes / 1048576));
+      }
+
       EmulatedGeometry entry;
+      phxvk::NoteBufferKind(6);
       entry.vbo = phxvk::CreateBuffer(fat.vertices.size(), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &entry.vboMemory);
       entry.ibo = phxvk::CreateBuffer(fat.indices.size() * sizeof(uint32_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -2136,6 +2153,8 @@ bool ContextImpl::DrawInternal(bool indexed, UINT count, UINT instanceCount, UIN
       vkUnmapMemory(phxvk::Vk().device, entry.vboMemory);
       vkUnmapMemory(phxvk::Vk().device, entry.iboMemory);
       entry.indexCount = (uint32_t)fat.indices.size();
+      entry.bytes = entryBytes;
+      emulatedGeometryCacheBytes += entryBytes;
       entry.vertexStride = (uint32_t)(vertexStrides[0] * (uint32_t)emulationPlan->program.inputVertices);
       cached = emulatedGeometryCache.emplace(cacheKey, entry).first;
     }

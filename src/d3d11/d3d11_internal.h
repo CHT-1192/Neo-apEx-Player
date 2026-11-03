@@ -717,8 +717,17 @@ struct ContextImpl : public ID3D11DeviceContext, public ObjectBase
     VkDeviceMemory iboMemory = VK_NULL_HANDLE;
     uint32_t indexCount = 0;
     uint32_t vertexStride = 0;
+    uint64_t bytes = 0;
   };
   std::unordered_map<uint64_t, EmulatedGeometry> emulatedGeometryCache;
+  // The cache is keyed by what a draw actually asked for, so a demo that keeps
+  // finding new ways to draw keeps adding to it.  Measured on Clean Slate: the
+  // shim's buffer total went from 645 to 2076 over 12000 frames, +2.5 GB, all of
+  // it this cache.  It is bounded here and cleared through the deferred-free list,
+  // which is fence-safe (an entry queued during frame N is freed when that slot's
+  // fence is next waited, by which time N and N+1 have been submitted).
+  static constexpr uint64_t kEmulatedGeometryCacheBytes = 256ull * 1024 * 1024;
+  uint64_t emulatedGeometryCacheBytes = 0;
 
   ID3D11InputLayout *inputLayout = nullptr;
   ID3D11Buffer *vertexBuffers[16] = {};

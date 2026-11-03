@@ -542,8 +542,22 @@ struct MemStats
 MemStats g_memStats;
 } // namespace
 
+// Which call site created a buffer, so a growth can be attributed rather than
+// guessed at.
+static int g_bufferKinds[8] = {0};
+static const char *kBufferKindNames[8] = {"?", "texture staging", "buffer staging", "staging/copy", "texture upload",
+                                          "device buffer", "emulated GS vbo/ibo", "other"};
+
+void NoteBufferKind(int kind)
+{
+  if (kind >= 0 && kind < 8) g_bufferKinds[kind]++;
+}
+
 void PrintMemoryStats()
 {
+  for (int i = 1; i < 8; i++)
+    if (g_bufferKinds[i])
+      LogInfo("[mem]   kind %-18s %d", kBufferKindNames[i], g_bufferKinds[i]);
   std::sort(g_memStats.largest.begin(), g_memStats.largest.end(),
             [](const auto &a, const auto &b) { return a.first > b.first; });
   LogInfo("[mem] images: %llu (%.1f MB), buffers: %llu (%.1f MB), host-visible: %.1f MB",

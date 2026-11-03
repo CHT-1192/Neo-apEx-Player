@@ -194,20 +194,35 @@ bool DumpTextureToPPM(ID3D11Texture2D *srcTexture, const char *path, std::string
   return true;
 }
 
+// Set by the player when it wants frames larger than the window can be: the
+// swap chain is bound to the window, but the engine only reads the *back buffer
+// view*, so an off-screen texture of any size can stand in for it.
+ID3D11Texture2D *g_offscreenBackBuffer = nullptr;
+
+void SetOffscreenBackBuffer(ID3D11Texture2D *texture) { g_offscreenBackBuffer = texture; }
+
 bool ReadBackBufferRGB(std::vector<uint8_t> &out, UINT *width, UINT *height, std::string *error)
 {
-  if (!SwapChain)
-  {
-    if (error) *error = "no swap chain";
-    phxvk::LogError("frame readback: no swap chain");
-    return false;
-  }
   ID3D11Texture2D *back = nullptr;
-  if (FAILED(SwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), (void **)&back)) || !back)
+  if (g_offscreenBackBuffer)
   {
-    if (error) *error = "SwapChain::GetBuffer(0) failed";
-    phxvk::LogError("frame readback: SwapChain::GetBuffer(0) failed");
-    return false;
+    back = g_offscreenBackBuffer;
+    back->AddRef();
+  }
+  else
+  {
+    if (!SwapChain)
+    {
+      if (error) *error = "no swap chain";
+      phxvk::LogError("frame readback: no swap chain");
+      return false;
+    }
+    if (FAILED(SwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), (void **)&back)) || !back)
+    {
+      if (error) *error = "SwapChain::GetBuffer(0) failed";
+      phxvk::LogError("frame readback: SwapChain::GetBuffer(0) failed");
+      return false;
+    }
   }
   bool ok = ReadTextureRGB24(back, out, width, height, error);
   back->Release();

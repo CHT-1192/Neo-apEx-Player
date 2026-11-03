@@ -8,6 +8,9 @@
 // synthesise the music - but the song's tick timeline is fully recoverable from
 // the .mvm header, so the wall clock (src/player/song_clock.cpp) reproduces the
 // original timing exactly.
+#if defined(__APPLE__)
+#include <mach/mach.h>   // [rss] resident size, for leak measurements
+#endif
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -83,6 +86,8 @@ struct Options
   int renderFps = 0;         // --render-fps; cap how fast an offline run renders (0 = unlimited)
   int yieldPct = 0;          // --yield; sleep this percentage of each frame's cost (0 = never)
   bool rawVideo = false;     // --raw-video; write each frame to stdout as RGB24
+  int offscreenW = 0, offscreenH = 0; // --offscreen WxH; render into a texture, not the window
+  int maxRssMb = 0;                  // --max-rss-mb N; exit if resident size exceeds N
   bool rawVideoHeaderDone = false;
   bool preheat = false;      // --preheat; off by default, see the measured trade-off in STATUS.md
   // The release player puts its setup dialog in front of everything else
@@ -122,6 +127,13 @@ static void Usage(const char *argv0)
           "  --preheat            initialise every event before playback.  Halves each\n"
           "                       event's first-frame stall (1412 -> 805 ms on Clean\n"
           "                       Slate) but costs 1.6 s of loading, so it is opt-in\n"
+          "  --max-rss-mb N       stop once the process exceeds N megabytes.  Measurement\n"
+          "                       runs should never be able to push the machine into\n"
+          "                       swap to find out how much memory they use\n"
+          "  --offscreen WxH      render into a texture of this size instead of the window's\n"
+          "                       back buffer, so the frame size is not limited by the\n"
+          "                       display.  Needs --raw-video or --dump-frame to see the\n"
+          "                       result; the window stays as it is and is still presented\n"
           "  --raw-video          write every finished frame to stdout as raw RGB24 and\n"
           "                       keep stdout free of anything else, so the picture can\n"
           "                       be piped straight into an encoder:\n"
@@ -179,6 +191,16 @@ static bool ParseArgs(int argc, char **argv, Options &o)
     else if (a == "--render-fps") o.renderFps = atoi(next("--render-fps"));
     else if (a == "--yield") o.yieldPct = atoi(next("--yield"));
     else if (a == "--raw-video") o.rawVideo = true;
+    else if (a == "--max-rss-mb") o.maxRssMb = atoi(next("--max-rss-mb"));
+    else if (a == "--offscreen")
+    {
+      const char *v = next("--offscreen");
+      const char *x = strchr(v, 'x');
+      if (!x) { fprintf(stderr, "--offscreen expects WxH\n"); return false; }
+      o.offscreenW = atoi(v);
+      o.offscreenH = atoi(x + 1);
+      if (o.offscreenW <= 0 || o.offscreenH <= 0) { fprintf(stderr, "--offscreen expects WxH\n"); return false; }
+    }
     else if (a == "--preheat") o.preheat = true;
     else if (a == "--no-preheat") o.preheat = false;
     else if (a == "--ui") o.enableUi = true;
@@ -673,6 +695,47 @@ int main(int argc, char **argv)
       return 1;
     }
     phxvk::LogInfo("back buffer view: %p", (void *)phxBackBufferView);
+  }
+
+  // Render into a texture of the size we were asked for, rather than the window's
+  // image.  Everything downstream follows the back-buffer *view*, and the window
+  // is clamped to what the display can hold (measured here: a 3840x2160 request
+  // became 1470x777), so without this a frame larger than the screen is not
+  // reachable at all.
+  if (opt.offscreenW > 0 && opt.offscreenH > 0)
+  {
+    D3D11_TEXTURE2D_DESC td{};
+    td.Width = (UINT)opt.offscreenW;
+    td.Height = (UINT)opt.offscreenH;
+    td.MipLevels = 1;
+    td.ArraySize = 1;
+    td.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    td.SampleDesc.Count = 1;
+    td.Usage = D3D11_USAGE_DEFAULT;
+    td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+    ID3D11Texture2D *offscreen = nullptr;
+    if (FAILED(phxDev->CreateTexture2D(&td, nullptr, &offscreen)) || !offscreen)
+    {
+      phxvk::LogError("could not create the %dx%d offscreen back buffer", opt.offscreenW, opt.offscreenH);
+      return 1;
+    }
+    D3D11_RENDER_TARGET_VIEW_DESC rtvDesc;
+    memset(&rtvDesc, 0, sizeof(rtvDesc));
+    rtvDesc.Format = getenv("APEX_NO_SRGB_BACKBUFFER") ? DXGI_FORMAT_B8G8R8A8_UNORM
+                                                       : DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
+    rtvDesc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+    ID3D11RenderTargetView *offscreenView = nullptr;
+    if (FAILED(phxDev->CreateRenderTargetView(offscreen, &rtvDesc, &offscreenView)) || !offscreenView)
+    {
+      phxvk::LogError("could not create the offscreen back buffer view");
+      offscreen->Release();
+      return 1;
+    }
+    if (phxBackBufferView) phxBackBufferView->Release();
+    phxBackBufferView = offscreenView;
+    phxplayer::SetOffscreenBackBuffer(offscreen);
+    phxvk::LogInfo("offscreen back buffer: %dx%d (the window is %dx%d)", opt.offscreenW, opt.offscreenH,
+                   (int)window.GetXRes(), (int)window.GetYRes());
   }
 
   // ---------------------------------------------------------------------
@@ -1487,7 +1550,34 @@ int main(int argc, char **argv)
 
     rendered++;
     if (rendered % 300 == 0) phxvk::PrintFrameStats();
-    if (rendered == 1) phxvk::PrintMemoryStats();
+    // Its own resident size every 200 frames, so a leak shows as a slope in a
+    // run short enough not to hurt: measuring memory by exhausting it is not a
+    // measurement.
+#if defined(__APPLE__)
+    if ((rendered % 200) == 0)
+    {
+      mach_task_basic_info info;
+      mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
+      if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, (task_info_t)&info, &count) == KERN_SUCCESS)
+        phxvk::LogInfo("[rss] frame %lld: %.0f MB", (long long)clock.Frame(), info.resident_size / 1048576.0);
+    }
+    if (opt.maxRssMb > 0)
+    {
+      mach_task_basic_info capInfo;
+      mach_msg_type_number_t capCount = MACH_TASK_BASIC_INFO_COUNT;
+      if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, (task_info_t)&capInfo, &capCount) == KERN_SUCCESS)
+      {
+        const double mb = capInfo.resident_size / 1048576.0;
+        if (mb > opt.maxRssMb)
+        {
+          phxvk::LogError("[rss] stopping at frame %lld: %.0f MB exceeds --max-rss-mb %d", (long long)clock.Frame(),
+                          mb, opt.maxRssMb);
+          std::_Exit(3);
+        }
+      }
+    }
+#endif
+    if (rendered == 1 || (rendered % 2000) == 0) phxvk::PrintMemoryStats();
     if (opt.frames >= 0 && rendered >= opt.frames) break;
     if (phxDone) phxvk::LogInfo("the timeline ended the demo at frame %lld", (long long)clock.Frame());
     if (song.valid && clock.Finished())

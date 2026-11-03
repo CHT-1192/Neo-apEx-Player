@@ -22,6 +22,11 @@ bool DumpBackBufferToPPM(const char *path, std::string *error);
 // Reads the back buffer as tightly packed RGB24 (height * width * 3 bytes), the
 // form a raw video pipe wants: `--raw-video | ffmpeg -f rawvideo -pix_fmt rgb24`.
 bool ReadBackBufferRGB(std::vector<uint8_t> &out, UINT *width, UINT *height, std::string *error);
+
+// Replaces the swap chain's image as the readback source, so a window smaller
+// than the requested frame size is not a limit.  The engine reads the back-buffer
+// view either way; this only changes what the *dump* reads.
+void SetOffscreenBackBuffer(ID3D11Texture2D *texture);
 bool ReadTextureRGB24(ID3D11Texture2D *texture, std::vector<uint8_t> &out, UINT *width, UINT *height,
                       std::string *error);
 
