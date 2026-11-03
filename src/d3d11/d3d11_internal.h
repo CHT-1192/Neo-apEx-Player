@@ -231,6 +231,10 @@ struct TextureImpl
   UINT bindFlags = 0;
   UINT miscFlags = 0;
   UINT cpuAccessFlags = 0;
+  // How often this texture has been bound as a shader resource.  A texture that
+  // carries mip levels and is never sampled (only rendered into) is holding a
+  // chain nobody reads; measured rather than assumed.
+  unsigned long long srvBindCount = 0;
   D3D11_USAGE usage = D3D11_USAGE_DEFAULT;
 
   VkImage image = VK_NULL_HANDLE;

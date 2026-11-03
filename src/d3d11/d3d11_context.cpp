@@ -1,3 +1,4 @@
+#include <type_traits>
 // ID3D11DeviceContext: the D3D11 immediate context mapped onto one Vulkan
 // command buffer, dynamic rendering and lazily built pipelines.
 #include "d3d11_internal.h"
@@ -194,7 +195,21 @@ void SetTable(T *(&table)[N], UINT start, UINT count, T *const *objects)
 {
   if (start >= N) return;
   if (count > N - start) count = (UINT)(N - start);
-  for (UINT i = 0; i < count; i++) BindRef(table[start + i], objects ? objects[i] : nullptr);
+  for (UINT i = 0; i < count; i++)
+  {
+    BindRef(table[start + i], objects ? objects[i] : nullptr);
+    if constexpr (std::is_same<T, ID3D11ShaderResourceView>::value) NoteSrvBind(objects ? objects[i] : nullptr);
+  }
+}
+
+// [port] Notes that a texture was actually sampled, so the probe can tell a mip
+// chain that is read from one that is only ever rendered into.
+void NoteSrvBind(ID3D11ShaderResourceView *view)
+{
+  if (!view) return;
+  auto *impl = static_cast<SRVImpl *>(view);
+  if (!impl->v.texture) return;
+  impl->v.texture->srvBindCount++;
 }
 
 } // namespace
