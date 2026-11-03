@@ -60,9 +60,9 @@ struct Device
   // been waited on: with two frames in flight that means frame F-2 has completed,
   // and list[F%2] holds exactly what frame F-2 released.
   std::vector<std::pair<VkBuffer, VkDeviceMemory>> deferredFree[kFramesInFlight];
+  std::vector<std::pair<VkImage, VkDeviceMemory>> deferredFreeImages[kFramesInFlight];
   // Images that were released while a frame command buffer might still
   // reference them (the engine churns texgen textures during generation).
-  std::vector<std::pair<VkImage, VkDeviceMemory>> deferredFreeImages[kFramesInFlight];
   std::vector<VkImageView> deferredFreeViews[kFramesInFlight];
 };
 
@@ -90,6 +90,11 @@ const char *DeviceName();
 // Prints the accumulated frame cost, split into "blocked on the GPU" and "the
 // CPU was working", then resets the counters.
 void PrintFrameStats();
+
+// Live (allocated minus freed) image and buffer memory, not the cumulative total.
+// The first version of this only counted allocations, which reads as a leak when
+// the engine is churning through pooled textures exactly as it should.
+void PrintMemoryStats();
 
 // Extra instance extensions (e.g. the VK_KHR_surface / VK_EXT_metal_surface
 // pair SDL asks for).  Must be called *before* vkInitialize(); extensions that

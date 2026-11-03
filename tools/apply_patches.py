@@ -1461,62 +1461,62 @@ public:
     ),
     (
         "MinimalPlayer/SetupDialog.h",
-        """#include "..\\Phoenix\\PhoenixConfig_Full.h"""",
-        """#include "..\\Phoenix\\PhoenixConfig_full.h"""",
+        "#include \"..\\Phoenix\\PhoenixConfig_Full.h",
+        "#include \"..\\Phoenix\\PhoenixConfig_full.h",
         "MSVC resolves these on a case-insensitive filesystem; Linux does not. The include names the file that actually exists.",
     ),
     (
         "Phoenix/phxSpline.cpp",
-        """#include "PhoenixConfig_Full.h"""",
-        """#include "PhoenixConfig_full.h"""",
+        "#include \"PhoenixConfig_Full.h",
+        "#include \"PhoenixConfig_full.h",
         "MSVC resolves these on a case-insensitive filesystem; Linux does not. The include names the file that actually exists.",
     ),
     (
         "Phoenix/phxEngine.cpp",
-        """#include "PhoenixConfig_Full.h"""",
-        """#include "PhoenixConfig_full.h"""",
+        "#include \"PhoenixConfig_Full.h",
+        "#include \"PhoenixConfig_full.h",
         "MSVC resolves these on a case-insensitive filesystem; Linux does not. The include names the file that actually exists.",
     ),
     (
         "Phoenix/phxMath.cpp",
-        """#include "PhoenixConfig_Full.h"""",
-        """#include "PhoenixConfig_full.h"""",
+        "#include \"PhoenixConfig_Full.h",
+        "#include \"PhoenixConfig_full.h",
         "MSVC resolves these on a case-insensitive filesystem; Linux does not. The include names the file that actually exists.",
     ),
     (
         "Phoenix/phxSpline.h",
-        """#include "PhoenixConfig_Full.h"""",
-        """#include "PhoenixConfig_full.h"""",
+        "#include \"PhoenixConfig_Full.h",
+        "#include \"PhoenixConfig_full.h",
         "MSVC resolves these on a case-insensitive filesystem; Linux does not. The include names the file that actually exists.",
     ),
     (
         "Phoenix/phxEngine.h",
-        """#include "PhoenixConfig_Full.h"""",
-        """#include "PhoenixConfig_full.h"""",
+        "#include \"PhoenixConfig_Full.h",
+        "#include \"PhoenixConfig_full.h",
         "MSVC resolves these on a case-insensitive filesystem; Linux does not. The include names the file that actually exists.",
     ),
     (
         "Phoenix/Texgen.h",
-        """#include "PhoenixConfig_Full.h"""",
-        """#include "PhoenixConfig_full.h"""",
+        "#include \"PhoenixConfig_Full.h",
+        "#include \"PhoenixConfig_full.h",
         "MSVC resolves these on a case-insensitive filesystem; Linux does not. The include names the file that actually exists.",
     ),
     (
         "Phoenix/phxarray.h",
-        """#include "PhoenixConfig_Full.h"""",
-        """#include "PhoenixConfig_full.h"""",
+        "#include \"PhoenixConfig_Full.h",
+        "#include \"PhoenixConfig_full.h",
         "MSVC resolves these on a case-insensitive filesystem; Linux does not. The include names the file that actually exists.",
     ),
     (
         "Phoenix/Arbaro.h",
-        """#include "PhoenixConfig_Full.h"""",
-        """#include "PhoenixConfig_full.h"""",
+        "#include \"PhoenixConfig_Full.h",
+        "#include \"PhoenixConfig_full.h",
         "MSVC resolves these on a case-insensitive filesystem; Linux does not. The include names the file that actually exists.",
     ),
     (
         "Phoenix/Timeline.h",
-        """#include "PhoenixConfig_Full.h"""",
-        """#include "PhoenixConfig_full.h"""",
+        "#include \"PhoenixConfig_Full.h",
+        "#include \"PhoenixConfig_full.h",
         "MSVC resolves these on a case-insensitive filesystem; Linux does not. The include names the file that actually exists.",
     ),
     (
@@ -1551,8 +1551,8 @@ public:
     ),
     (
         "Phoenix_Tool/Audio/phxSongV2M.cpp",
-        """#include "../../libraries/v2/v2mPlayer.cpp"""",
-        """#include "../../libraries/v2/v2mplayer.cpp"""",
+        "#include \"../../libraries/v2/v2mPlayer.cpp",
+        "#include \"../../libraries/v2/v2mplayer.cpp",
         "MSVC resolves these on a case-insensitive filesystem; Linux does not. The include names the file that actually exists.",
     ),
     (
@@ -1569,14 +1569,14 @@ public:
     ),
     (
         "Bedrock/Whiteboard/CSSItem.cpp",
-        """#include "cssitem.h"""",
-        """#include "CSSItem.h"""",
+        "#include \"cssitem.h",
+        "#include \"CSSItem.h",
         "MSVC resolves these on a case-insensitive filesystem; Linux does not. The include names the file that actually exists.",
     ),
     (
         "Bedrock/Whiteboard/GuiItem.h",
-        """#include "cssitem.h"""",
-        """#include "CSSItem.h"""",
+        "#include \"cssitem.h",
+        "#include \"CSSItem.h",
         "MSVC resolves these on a case-insensitive filesystem; Linux does not. The include names the file that actually exists.",
     ),
     (
@@ -1584,6 +1584,27 @@ public:
         """    <ClInclude Include="cssitem.h" />""",
         """    <ClInclude Include="CSSItem.h" />""",
         "MSVC resolves these on a case-insensitive filesystem; Linux does not. The include names the file that actually exists.",
+    ),
+    (
+        "Phoenix/phxSpline.h",
+        "  float NoiseMap[ WAVEFORMSPLINENOISEBUFFERSIZE ];",
+        """  // [port] Allocated on first use.  Only WAVEFORM_NOISE reads it, and at 32 KB
+  // per spline it was ~0.96 GB for Clean Slate's 30,780 texgen parameter splines,
+  // none of which use a noise waveform.  Measured with `heap`: 49,152 bytes per
+  // CphxSpline_float16, of which this array was the bulk.
+  float *NoiseMap = nullptr;
+  float *Noise()
+  {
+    if ( !NoiseMap ) NoiseMap = new float[ WAVEFORMSPLINENOISEBUFFERSIZE ]();
+    return NoiseMap;
+  }""",
+        "the waveform noise buffer is 32 KB per spline and almost never used",
+    ),
+    (
+        "Phoenix/phxSpline.cpp",
+        "  case WAVEFORM_NOISE:\n  {",
+        "  case WAVEFORM_NOISE:\n  {\n    float *NoiseMap = Noise();   // [port] lazily allocated, see phxSpline.h",
+        "the noise path binds the lazily allocated buffer",
     ),
 ]
 

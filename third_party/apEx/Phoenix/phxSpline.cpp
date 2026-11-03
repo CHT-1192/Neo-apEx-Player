@@ -201,6 +201,12 @@ void CphxSpline_float16::PostProcess( float t )
 #ifdef SPLINE_WAVEFORM_NOISE
   case WAVEFORM_NOISE:
   {
+    float *NoiseMap = Noise();   // [port] lazily allocated, see phxSpline.h
+    float *NoiseMap = Noise();   // [port] lazily allocated, see phxSpline.h
+    float *NoiseMap = Noise();   // [port] lazily allocated, see phxSpline.h
+    float *NoiseMap = Noise();   // [port] lazily allocated, see phxSpline.h
+    float *NoiseMap = Noise();   // [port] lazily allocated, see phxSpline.h
+    float *NoiseMap = Noise();   // [port] lazily allocated, see phxSpline.h
     if ( !NoiseCalculated )
     {
       srand( RandSeed );

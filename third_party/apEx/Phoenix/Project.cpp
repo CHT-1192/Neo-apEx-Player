@@ -1,3 +1,4 @@
+#include <unordered_set>   // [port] spline import counting
 #include "Project.h"
 //#include "Event.h"
 //#include <D3Dcompiler.h>
@@ -1645,8 +1646,20 @@ void ImportClipSpline( CphxClipSpline *Spline )
 //  }
 //}
 //
+// [port] Counting, to answer "why are there eight times more splines than the
+// project declares" with a number: a call that re-imports the same object is a
+// different bug from a call that creates a new one each time.
+static int g_importSplineCalls = 0;
+static std::unordered_set<CphxSpline *> g_importedSplines;
+int phxSplineImportCalls() { return g_importSplineCalls; }
+int phxSplineImportDistinct() { return (int)g_importedSplines.size(); }
+long long phxSplineCreatedTotal() { return CphxSpline::phxCreatedSplines; }
+long long phxSplineLiveTotal() { return CphxSpline::phxLiveSplines; }
+
 void ImportSpline( CphxSpline *Spline ) // reads both float16 and quaternion splines
 {
+  g_importSplineCalls++;
+  g_importedSplines.insert( Spline );
   unsigned char c = readbyte( Stream_SplineDescriptors );
 
   DEFAULTSPLINETYPE d = (DEFAULTSPLINETYPE)( c & 0x03 );

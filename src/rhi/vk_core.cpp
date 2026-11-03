@@ -10,6 +10,9 @@
 
 namespace phxvk
 {
+// Defined with the accounting block below; declared here because the deferred-free
+// paths that call it are above it.
+static void NoteMemoryFreed(VkDeviceMemory memory);
 // Outside the anonymous namespace below: the tests call it, so it needs
 // external linkage.  Kept as a copy because vkShutdown() clears the properties
 // it comes from, and the summaries are printed after shutting down.
@@ -470,12 +473,14 @@ void vkShutdown()
     {
       vkDestroyBuffer(d.device, p.first, nullptr);
       vkFreeMemory(d.device, p.second, nullptr);
+      NoteMemoryFreed(p.second);
     }
     d.deferredFree[slot].clear();
     for (auto &p : d.deferredFreeImages[slot])
     {
       vkDestroyImage(d.device, p.first, nullptr);
       vkFreeMemory(d.device, p.second, nullptr);
+      NoteMemoryFreed(p.second);
     }
     d.deferredFreeImages[slot].clear();
     for (VkImageView v : d.deferredFreeViews[slot]) vkDestroyImageView(d.device, v, nullptr);
@@ -524,13 +529,31 @@ struct MemStats
   uint64_t images = 0, imageBytes = 0;
   uint64_t buffers = 0, bufferBytes = 0;
   uint64_t hostVisibleBytes = 0;
+  // Live = allocated minus freed.  Without the subtraction the totals only climb,
+  // which reads as a leak while the engine is churning pooled textures.
+  uint64_t liveImages = 0, liveImageBytes = 0;
+  uint64_t liveBuffers = 0, liveBufferBytes = 0;
+  std::unordered_map<VkDeviceMemory, std::pair<bool, uint64_t>> live; // isImage, bytes
+
+  void Release(VkDeviceMemory memory)
+  {
+    auto it = live.find(memory);
+    if (it == live.end()) return;
+    if (it->second.first) { liveImages--; liveImageBytes -= it->second.second; }
+    else { liveBuffers--; liveBufferBytes -= it->second.second; }
+    live.erase(it);
+  }
   std::vector<std::pair<uint64_t, std::string>> largest;
 
-  void Add(const char *kind, uint64_t bytes, VkMemoryPropertyFlags props, const char *what)
+  void Add(const char *kind, uint64_t bytes, VkMemoryPropertyFlags props, const char *what, VkDeviceMemory memory)
   {
     if (props & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) hostVisibleBytes += bytes;
     if (strcmp(kind, "image") == 0) { images++; imageBytes += bytes; }
     else { buffers++; bufferBytes += bytes; }
+    const bool isImage = strcmp(kind, "image") == 0;
+    live[memory] = {isImage, bytes};
+    if (isImage) { liveImages++; liveImageBytes += bytes; }
+    else { liveBuffers++; liveBufferBytes += bytes; }
     largest.emplace_back(bytes, std::string(kind) + (what ? what : ""));
     if (largest.size() > 4096)
     {
@@ -540,6 +563,8 @@ struct MemStats
   }
 };
 MemStats g_memStats;
+
+static void NoteMemoryFreed(VkDeviceMemory memory) { g_memStats.Release(memory); }
 } // namespace
 
 // Which call site created a buffer, so a growth can be attributed rather than
@@ -560,7 +585,10 @@ void PrintMemoryStats()
       LogInfo("[mem]   kind %-18s %d", kBufferKindNames[i], g_bufferKinds[i]);
   std::sort(g_memStats.largest.begin(), g_memStats.largest.end(),
             [](const auto &a, const auto &b) { return a.first > b.first; });
-  LogInfo("[mem] images: %llu (%.1f MB), buffers: %llu (%.1f MB), host-visible: %.1f MB",
+  LogInfo("[mem] LIVE: images %llu (%.1f MB), buffers %llu (%.1f MB)",
+          (unsigned long long)g_memStats.liveImages, g_memStats.liveImageBytes / 1048576.0,
+          (unsigned long long)g_memStats.liveBuffers, g_memStats.liveBufferBytes / 1048576.0);
+  LogInfo("[mem] cumulative allocs: %llu images (%.1f MB), %llu buffers (%.1f MB), host-visible %.1f MB",
           (unsigned long long)g_memStats.images, g_memStats.imageBytes / 1048576.0,
           (unsigned long long)g_memStats.buffers, g_memStats.bufferBytes / 1048576.0,
           g_memStats.hostVisibleBytes / 1048576.0);
@@ -577,7 +605,7 @@ VkDeviceMemory AllocateAndBind(VkImage image, VkMemoryRequirements req, VkMemory
   VkDeviceMemory mem = VK_NULL_HANDLE;
   PHXVK_CHECK(vkAllocateMemory(d.device, &ai, nullptr, &mem));
   PHXVK_CHECK(vkBindImageMemory(d.device, image, mem, 0));
-  g_memStats.Add("image", req.size, props, " image");
+  g_memStats.Add("image", req.size, props, " image", mem);
   return mem;
 }
 
@@ -590,7 +618,7 @@ VkDeviceMemory AllocateAndBindBuffer(VkBuffer buffer, VkMemoryRequirements req, 
   VkDeviceMemory mem = VK_NULL_HANDLE;
   PHXVK_CHECK(vkAllocateMemory(d.device, &ai, nullptr, &mem));
   PHXVK_CHECK(vkBindBufferMemory(d.device, buffer, mem, 0));
-  g_memStats.Add("buffer", req.size, props, " buffer");
+  g_memStats.Add("buffer", req.size, props, " buffer", mem);
   return mem;
 }
 

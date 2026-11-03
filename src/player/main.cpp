@@ -479,6 +479,10 @@ static void SetBlitSizeFromBackBuffer(CphxTimeline *timeline)
 // steps particles by the wall clock, which is wrong when --fixed-fps renders
 // frames far faster than they play; this makes the step the timeline's instead.
 extern float phxFixedParticleStep;
+extern int phxSplineImportCalls();
+extern int phxSplineImportDistinct();
+extern long long phxSplineCreatedTotal();
+extern long long phxSplineLiveTotal();
 
 int main(int argc, char **argv)
 {
@@ -1578,6 +1582,9 @@ int main(int argc, char **argv)
     }
 #endif
     if (rendered == 1 || (rendered % 2000) == 0) phxvk::PrintMemoryStats();
+  if (rendered == 1)
+    phxvk::LogInfo("[spline] created %lld, live %lld (ImportSpline called %d times on %d objects)",
+                   phxSplineCreatedTotal(), phxSplineLiveTotal(), phxSplineImportCalls(), phxSplineImportDistinct());
     if (opt.frames >= 0 && rendered >= opt.frames) break;
     if (phxDone) phxvk::LogInfo("the timeline ended the demo at frame %lld", (long long)clock.Frame());
     if (song.valid && clock.Finished())

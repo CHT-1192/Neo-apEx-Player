@@ -9,6 +9,11 @@
 //   view                     -> VkImageView (+ the layout it wants)
 #include "d3d11_internal.h"
 
+// How many times the engine has asked for a texture, so a probe can tell an
+// engine that asks twice apart from a shim that creates twice.
+static int g_texture2DRequests = 0;
+int Texture2DRequestCount() { return g_texture2DRequests; }
+
 #include "dxgi_formats.h"
 
 #include <cstdio>
@@ -524,7 +529,7 @@ HRESULT CreateTextureCommon(DeviceImpl *device, TextureImpl *tex, VkImageType ty
 
   VkResult res = vkCreateImage(phxvk::Vk().device, &ci, nullptr, &tex->image);
   if (getenv("APEX_MEM_PROBE"))
-    phxvk::LogInfo("[tex] %ux%ux%u mips %u array %u fmt %d -> %.1f MB", tex->width, tex->height, tex->depth,
+    phxvk::LogInfo("[tex] request #%d: %ux%ux%u mips %u array %u fmt %d -> %.1f MB", Texture2DRequestCount(), tex->width, tex->height, tex->depth,
                    tex->mipLevels, tex->arraySize, (int)format,
                    (double)ci.extent.width * ci.extent.height * ci.extent.depth * (ci.mipLevels ? ci.mipLevels : 1) / 1.0e6),
                  phxvk::LogInfo("[tex]   bind 0x%x misc 0x%x", (unsigned)tex->bindFlags, (unsigned)tex->miscFlags);
@@ -551,6 +556,7 @@ HRESULT CreateTextureCommon(DeviceImpl *device, TextureImpl *tex, VkImageType ty
 
 HRESULT DeviceImpl::CreateTexture2D(const D3D11_TEXTURE2D_DESC *pDesc, const D3D11_SUBRESOURCE_DATA *pInitialData, ID3D11Texture2D **ppTexture2D)
 {
+  g_texture2DRequests++;
   if (!ppTexture2D) return E_POINTER;
   *ppTexture2D = nullptr;
   if (!pDesc || !pDesc->Width || !pDesc->Height) return E_INVALIDARG;

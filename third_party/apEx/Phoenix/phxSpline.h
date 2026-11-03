@@ -82,6 +82,19 @@ class CphxSpline
 {
 public:
 
+  // [port] Live-object counting in the class itself: the objects are 48 KB each
+  // (32 KB of which is a waveform noise buffer), so how many exist and who makes
+  // them is worth knowing exactly.
+  static inline long long phxLiveSplines = 0;
+  static inline long long phxCreatedSplines = 0;
+
+  CphxSpline()
+  {
+    phxLiveSplines++;
+    phxCreatedSplines++;
+  }
+  virtual ~CphxSpline() { phxLiveSplines--; delete[] NoiseMap; }
+
   float Value[ 4 ]; //calculated output value
 
   SPLINEINTERPOLATION Interpolation;
@@ -96,7 +109,16 @@ public:
   bool MultiplicativeWaveform;
   unsigned char RandSeed;
   bool NoiseCalculated;
-  float NoiseMap[ WAVEFORMSPLINENOISEBUFFERSIZE ];
+  // [port] Allocated on first use.  Only WAVEFORM_NOISE reads it, and at 32 KB
+  // per spline it was ~0.96 GB for Clean Slate's 30,780 texgen parameter splines,
+  // none of which use a noise waveform.  Measured with `heap`: 49,152 bytes per
+  // CphxSpline_float16, of which this array was the bulk.
+  float *NoiseMap = nullptr;
+  float *Noise()
+  {
+    if ( !NoiseMap ) NoiseMap = new float[ WAVEFORMSPLINENOISEBUFFERSIZE ]();
+    return NoiseMap;
+  }
 
   void CalculateValue( float t );
 #if defined SPLINE_WAVEFORM_SIN || defined SPLINE_WAVEFORM_SQUARE || defined SPLINE_WAVEFORM_TRIANGLE || defined SPLINE_WAVEFORM_SAWTOOTH || defined SPLINE_WAVEFORM_NOISE
