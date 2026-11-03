@@ -117,8 +117,18 @@ void Prepare2dRender()
   phxContext->DSSetShader( NULL, NULL, 0 );
 }
 
+// [port] Counting, to answer "where do the ~15 ms of GPU time per frame go":
+// texgen costs one full-screen pass per operator render, at the pool resolution.
+static unsigned long long g_texgenRenders = 0;
+static unsigned long long g_texgenPixels = 0;
+unsigned long long phxTexgenRenders() { return g_texgenRenders; }
+unsigned long long phxTexgenPixels() { return g_texgenPixels; }
+void phxTexgenResetCounters() { g_texgenRenders = 0; g_texgenPixels = 0; }
+
 void PHXTEXTUREFILTER::Render( CphxTexturePoolTexture *&Target, CphxTexturePoolTexture *&SwapBuffer, CphxTexturePoolTexture *Inputs[ TEXGEN_MAX_PARENTS ], unsigned char RandSeed, unsigned char Parameters[ TEXGEN_MAX_PARAMS ], void *ExtraData, intptr_t ExtraDataSize )
 {
+  g_texgenRenders++;
+  if ( Target ) g_texgenPixels += (unsigned long long) GETXRES( Target->Resolution ) * GETYRES( Target->Resolution );
   srand( RandSeed );
   float ShaderData[ TEXGEN_MAX_PARAMS + 4 ];
 

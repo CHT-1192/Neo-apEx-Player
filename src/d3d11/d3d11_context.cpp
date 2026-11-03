@@ -2241,7 +2241,13 @@ bool ContextImpl::DrawInternal(bool indexed, UINT count, UINT instanceCount, UIN
   return true;
 }
 
-void ContextImpl::Draw(UINT VertexCount, UINT StartVertexLocation) { DrawInternal(false, VertexCount, 1, 0, 0, StartVertexLocation, 0); }
+// [port] Per-frame draw counting: a D3D11-on-Vulkan shim can easily end up
+// draw-call bound, and this is the cheapest way to find out.
+static unsigned long long g_draws = 0;
+unsigned long long phxDrawCount() { return g_draws; }
+void phxDrawResetCounters() { g_draws = 0; }
+
+void ContextImpl::Draw(UINT VertexCount, UINT StartVertexLocation) { g_draws++; DrawInternal(false, VertexCount, 1, 0, 0, StartVertexLocation, 0); }
 void ContextImpl::DrawIndexed(UINT IndexCount, UINT StartIndexLocation, INT BaseVertexLocation)
 {
 #ifdef APEX_TRACE_UI_DRAWS

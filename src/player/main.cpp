@@ -484,6 +484,10 @@ extern int phxSplineImportCalls();
 extern int phxSplineImportDistinct();
 extern long long phxSplineCreatedTotal();
 extern long long phxSplineLiveTotal();
+extern unsigned long long phxTexgenRenders();
+extern unsigned long long phxTexgenPixels();
+namespace phxd3d11 { unsigned long long phxDrawCount(); }
+extern void phxTexgenResetCounters();
 
 int main(int argc, char **argv)
 {
@@ -1560,6 +1564,25 @@ int main(int argc, char **argv)
 
     rendered++;
     if (rendered % 300 == 0) phxvk::PrintFrameStats();
+    if ((rendered % 300) == 0)
+    {
+  static unsigned long long lastR = 0, lastP = 0, lastD = 0;
+  static long long lastF = 0;
+  if (rendered > lastF)
+  {
+    const double frames = (double)(rendered - lastF);
+    phxvk::LogInfo("[texgen] %.1f renders and %.1f megapixels per frame over frames %lld..%lld",
+                   (phxTexgenRenders() - lastR) / frames, (phxTexgenPixels() - lastP) / 1e6 / frames,
+                   lastF, (long long)rendered);
+    phxvk::LogInfo("[draws] %.1f draws per frame over frames %lld..%lld",
+                   (phxd3d11::phxDrawCount() - lastD) / frames, lastF, (long long)rendered);
+    lastD = phxd3d11::phxDrawCount();
+    lastR = phxTexgenRenders();
+    lastP = phxTexgenPixels();
+    lastF = (long long)rendered;
+  }
+    }
+
     // Its own resident size every 200 frames, so a leak shows as a slope in a
     // run short enough not to hurt: measuring memory by exhausting it is not a
     // measurement.
