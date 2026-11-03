@@ -135,6 +135,32 @@ HRESULT SwapChainImpl::PresentFrame(UINT, UINT)
   if (!m_chain.valid()) return DXGI_ERROR_INVALID_CALL;
   if (!m_context) return E_FAIL;
 
+  // Off screen, nothing is presented: no image is acquired, nothing is
+  // transitioned, and the window's swap chain is never touched.  The frame is
+  // submitted and the *next* FrameBegin waits on its fence, which keeps two frames
+  // in flight; waiting here as well would serialise the pipeline.  The fence must
+  // not be reset here -- FrameBegin owns that, and resetting it deadlocks the third
+  // frame (measured, at 0% CPU forever).
+  if (phxvk::vkSkipPresentEnabled())
+  {
+    m_context->EndRendering();
+    if (!d.frameActive) phxvk::FrameBegin();
+    VkCommandBuffer cmd = d.frameCmd;
+    PHXVK_CHECK(vkEndCommandBuffer(cmd));
+    VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    si.commandBufferCount = 1;
+    si.pCommandBuffers = &cmd;
+    const VkResult queued = vkQueueSubmit(d.queue, 1, &si, d.frameFence);
+    d.frameActive = false;
+    d.frameIndex++;
+    if (queued != VK_SUCCESS)
+    {
+      phxvk::LogError("vkQueueSubmit failed: %s", phxvk::VkResultName(queued));
+      return DXGI_ERROR_DEVICE_REMOVED;
+    }
+    return S_OK;
+  }
+
   // Close the dynamic-rendering instance before touching the back buffer.
   m_context->EndRendering();
 

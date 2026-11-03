@@ -739,6 +739,7 @@ int main(int argc, char **argv)
     if (phxBackBufferView) phxBackBufferView->Release();
     phxBackBufferView = offscreenView;
     phxplayer::SetOffscreenBackBuffer(offscreen);
+    phxvk::vkSetSkipPresent(true);
     phxvk::LogInfo("offscreen back buffer: %dx%d (the window is %dx%d)", opt.offscreenW, opt.offscreenH,
                    (int)window.GetXRes(), (int)window.GetYRes());
   }

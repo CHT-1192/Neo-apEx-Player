@@ -578,6 +578,10 @@ void NoteBufferKind(int kind)
   if (kind >= 0 && kind < 8) g_bufferKinds[kind]++;
 }
 
+static bool g_skipPresent = false;
+void vkSetSkipPresent(bool skip) { g_skipPresent = skip; }
+bool vkSkipPresentEnabled() { return g_skipPresent; }
+
 void PrintMemoryStats()
 {
   for (int i = 1; i < 8; i++)

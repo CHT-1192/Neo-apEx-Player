@@ -81,6 +81,10 @@ void vkShutdown();
 // Totals for every image and buffer the shim has allocated, largest first.
 void PrintMemoryStats();
 
+// Off-screen rendering presents nothing: skip the swap-chain acquire and present.
+void vkSetSkipPresent(bool skip);
+bool vkSkipPresentEnabled();
+
 // Attribute a buffer allocation to a call site, for the statistics above.
 void NoteBufferKind(int kind);
 
@@ -95,6 +99,10 @@ void PrintFrameStats();
 // The first version of this only counted allocations, which reads as a leak when
 // the engine is churning through pooled textures exactly as it should.
 void PrintMemoryStats();
+
+// Off-screen rendering presents nothing: skip the swap-chain acquire and present.
+void vkSetSkipPresent(bool skip);
+bool vkSkipPresentEnabled();
 
 // Extra instance extensions (e.g. the VK_KHR_surface / VK_EXT_metal_surface
 // pair SDL asks for).  Must be called *before* vkInitialize(); extensions that
