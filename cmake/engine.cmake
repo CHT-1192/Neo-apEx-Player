@@ -108,6 +108,14 @@ target_compile_options(phx_imgui PRIVATE -w)
 add_executable(neo_apex_player ${APEX_PLAYER_SOURCES})
 target_link_libraries(neo_apex_player PRIVATE apex_engine phx_imgui)
 
+# GPU frame capture (MTLCaptureManager) is Objective-C++ and Apple only.
+if(APPLE)
+  enable_language(OBJCXX)
+  target_sources(neo_apex_player PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/player/metal_capture.mm)
+  target_compile_options(neo_apex_player PRIVATE -fobjc-arc)
+  target_link_libraries(neo_apex_player PRIVATE "-framework Metal" "-framework Foundation")
+endif()
+
 # Headless render smoke test (owned by the D3D11 shim work).
 #
 # CMakeLists.txt also declares this target for the renderer-only configuration;

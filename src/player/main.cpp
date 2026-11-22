@@ -25,6 +25,7 @@
 #include "DX11Device.h"
 #include "D3Dcompiler.h"
 #include "phxEngine.h"
+#include "player/metal_capture.h"
 #include "apxPhoenix.h"
 #include "apxProject.h"
 #include "phxResource.h"
@@ -1517,6 +1518,25 @@ int main(int argc, char **argv)
       const uint64_t budgetMs = 1000 / (uint64_t)opt.renderFps;
       const uint64_t spent = NowSteadyMs() - tFrame;
       if (spent < budgetMs) SDL_Delay((Uint32)(budgetMs - spent));
+    }
+
+    // MTL_CAPTURE=/tmp/gs.gputrace captures one frame of Metal work (the one at
+    // MTL_CAPTURE_FRAME), which is the only way to see what the vertex stage
+    // actually reads.  One frame, not three: the trace also snapshots every live
+    // resource and this demo's 4K atlases make it ~1 GB each frame's worth of
+    // nothing extra.
+    static const char *capturePath = getenv("MTL_CAPTURE");
+    static const long long captureFrame = getenv("MTL_CAPTURE_FRAME") ? atoll(getenv("MTL_CAPTURE_FRAME")) : 0;
+    static bool captureStarted = false, captureStopped = false;
+    if (capturePath && !captureStarted && (long long)rendered == captureFrame)
+    {
+      phxplayer_start_metal_capture(capturePath);
+      captureStarted = true;
+    }
+    if (capturePath && captureStarted && !captureStopped && (long long)rendered == captureFrame + 1)
+    {
+      phxplayer_stop_metal_capture();
+      captureStopped = true;
     }
 
     if (opt.fixedFps) clock.AdvanceFixedStep();
