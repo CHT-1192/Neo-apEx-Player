@@ -3102,6 +3102,15 @@ void CphxObject_ParticleEmitter_CPU_Tool::ResetParticles()
 
 void CphxObject_ParticleEmitter_CPU_Tool::SwapParticleBuffers()
 {
+  {
+    static long long n = 0;
+    n++;
+    if (n % 2000 == 0)
+    {
+      phxvk::LogInfo("[swap] %lld particle buffer swaps so far (obj %p, ticks now %.3f)", n, (void *)obj,
+                     obj ? obj->Ticks : -1.0f);
+    }
+  }
   if ( ContentReady() && obj && obj->Particles && backupBuffer && tempBuffer )
   {
     int lct = backupLiveCount;

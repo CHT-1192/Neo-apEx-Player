@@ -493,7 +493,8 @@ void CphxObject_ParticleEmitter_CPU::UpdateParticles( float elapsedtime, bool up
     static int n = 0;
     if (elapsedtime > 0.0f && n++ < 5)
     {
-      fprintf( stderr, "[upd+] obj %p dt=%.5f ticks_before=%.3f\n", (void *)this, elapsedtime, Ticks );
+      fprintf( stderr, "[upd+] obj %p &Ticks=%p frame=%d dt=%.5f ticks_before=%.3f\n", (void *)this,
+               (void *)&Ticks, CurrentFrame, elapsedtime, Ticks );
       fflush( stderr );
     }
     static long long zeroCalls = 0, allCalls = 0;
@@ -580,7 +581,12 @@ void CphxObject_ParticleEmitter_CPU::UpdateParticles( float elapsedtime, bool up
   delete[] oldmatrices;
   delete[] matrices;
 
-  if ( !updatebuffer ) return;
+  // [port] LiveCount is what the draw path iterates, and it used to be computed
+  // after an `if (!updatebuffer) return;`.  The particle-calc event passes
+  // updatebuffer = false (it only advances the simulation), so the count stayed 0
+  // while particles were alive and the draw loop below ran zero times -- the
+  // missing cloud at 3:00: one sphere, and the rest of the particles invisible even
+  // though they existed.  The count is not buffer state, so it is computed always.
 
   //sort particles
   LiveCount = 0;
@@ -609,6 +615,8 @@ void CphxObject_ParticleEmitter_CPU::UpdateParticles( float elapsedtime, bool up
   if ( Sort )
     qsort( DistanceBuffer, LiveCount, sizeof( PHXPARTICLEDISTANCE ), ParticleSorter );
 #endif
+
+  if ( !updatebuffer ) return;
 
   //create display buffer
 
@@ -657,16 +665,17 @@ void CphxObject_ParticleEmitter_CPU::CreateRenderDataInstances( int Clip, const 
     static int calls = 0;
     calls++;
     // first few, and then every 500th call so a short run shows the counter move
-    if ( reported < 8 ? ( Particles[ 0 ].LifeLeft > 0 || SplineResults[ Spline_Particle_EmissionPerSecond ] > 0 )
-                      : ( calls % 200 ) == 0 )
+    // The first particle-calc event is frames 5461..5916: report inside it, which
+    // costs a minute instead of the ten a 3:00 replay takes.
+    if ( CurrentFrame >= 5461 && CurrentFrame <= 5600 && ( calls % 50 ) == 0 )
     {
       reported++;
       const int slots = 1 << BufferSize;
       int alive = 0;
       for ( int y = 0; y < slots; y++ )
         if ( Particles[ y ].LifeLeft > 0 ) alive++;
-      fprintf( stderr, "[particles] obj %p frame %d buffersize %d = %d slots, %d alive, LiveCount %d, Ticks %.3f, emit-scene %d, emit-mesh %d, emit/s %.4f, life %.3f, lifechaos %.3f, aging %d, spawns %lld\n",
-              (void *)this, CurrentFrame, (int)BufferSize, slots, alive, (int)LiveCount, Ticks, SceneToEmit ? 1 : 0, ObjectToEmit ? 1 : 0,
+      fprintf( stderr, "[particles] obj %p &Ticks=%p frame %d buffersize %d = %d slots, %d alive, LiveCount %d, Ticks %.3f, emit-scene %d, emit-mesh %d, emit/s %.4f, life %.3f, lifechaos %.3f, aging %d, spawns %lld\n",
+              (void *)this, (void *)&Ticks, CurrentFrame, (int)BufferSize, slots, alive, (int)LiveCount, Ticks, SceneToEmit ? 1 : 0, ObjectToEmit ? 1 : 0,
               SplineResults[ Spline_Particle_EmissionPerSecond ], SplineResults[ Spline_Particle_Life ],
               SplineResults[ Spline_Particle_LifeChaos ], Aging ? 1 : 0, g_particleSpawns );
       fflush( stderr );
