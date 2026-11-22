@@ -1234,6 +1234,11 @@ ID3D11VertexShader *ContextImpl::EmulatedVertexShaderForLayout(const EmulatedGeo
   if (extra.empty() || !used) return nullptr;
 
   const std::string combined = plan->source + extra;
+  if (getenv("APEX_GS_BYTES_DUMP"))
+  {
+    FILE *f = fopen("/tmp/gsemu-bytes.hlsl", "w");
+    if (f) { fwrite(combined.data(), 1, combined.size(), f); fclose(f); }
+  }
   const std::string emuEntry = plan->gsEntry + "_emu";
   const phxvk::CompiledShader emu = phxvk::CompileHLSL(combined.c_str(), combined.size(), emuEntry.c_str(),
                                                        phxvk::ShaderStage::Vertex, "gs-emu/vs_5_0 (byte offsets)");
@@ -1551,7 +1556,12 @@ bool ContextImpl::PrepareDraw(VkPipeline *outPipeline, VkPipelineLayout *outLayo
       }
   }
 
-  if (il && !emulationUsesStorage)
+  // The vertex input declarations stay even when the stage reads a storage buffer:
+  // MoltenVK rejects a pipeline whose vertex input state is empty, and that rejection
+  // (VK_ERROR_INITIALIZATION_FAILED) drops the draw.  Measured: 30 failures with an
+  // empty input state, 0 with the declarations kept, and the declarations cost
+  // nothing because the generated stage reads no attributes.
+  if (il)
   {
     for (UINT rep = 0; rep < reps; rep++)
     for (UINT i = 0; i < il->elements.size(); i++)
