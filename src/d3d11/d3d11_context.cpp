@@ -2468,9 +2468,22 @@ static unsigned long long g_draws = 0;
 unsigned long long phxDrawCount() { return g_draws; }
 void phxDrawResetCounters() { g_draws = 0; }
 
-void ContextImpl::Draw(UINT VertexCount, UINT StartVertexLocation) { g_draws++; DrawInternal(false, VertexCount, 1, 0, 0, StartVertexLocation, 0); }
+
+// APEX_NO_DRAW=1 keeps the whole frame pipeline -- scene graph updates, the
+// particle-calc events, instance data generation -- and skips only the draw calls.
+// That is enough to advance particles to an arbitrary frame for inspection at a
+// fraction of the cost, because the per-draw work (484 draws and 543 render passes
+// per frame here) is what the CPU spends its time on.
+static bool NoDraw()
+{
+  static const bool noDraw = getenv("APEX_NO_DRAW") != nullptr;
+  return noDraw;
+}
+
+void ContextImpl::Draw(UINT VertexCount, UINT StartVertexLocation) { g_draws++; if (NoDraw()) return; DrawInternal(false, VertexCount, 1, 0, 0, StartVertexLocation, 0); }
 void ContextImpl::DrawIndexed(UINT IndexCount, UINT StartIndexLocation, INT BaseVertexLocation)
 {
+  if (NoDraw()) return;
 #ifdef APEX_TRACE_UI_DRAWS
   {
     static int n = 0;
@@ -2483,10 +2496,12 @@ void ContextImpl::DrawIndexed(UINT IndexCount, UINT StartIndexLocation, INT Base
 }
 void ContextImpl::DrawInstanced(UINT VertexCountPerInstance, UINT InstanceCount, UINT StartVertexLocation, UINT StartInstanceLocation)
 {
+  if (NoDraw()) return;
   DrawInternal(false, VertexCountPerInstance, InstanceCount, 0, 0, StartVertexLocation, StartInstanceLocation);
 }
 void ContextImpl::DrawIndexedInstanced(UINT IndexCountPerInstance, UINT InstanceCount, UINT StartIndexLocation, INT BaseVertexLocation, UINT StartInstanceLocation)
 {
+  if (NoDraw()) return;
   DrawInternal(true, IndexCountPerInstance, InstanceCount, StartIndexLocation, BaseVertexLocation, 0, StartInstanceLocation);
 }
 void ContextImpl::DrawAuto(void)

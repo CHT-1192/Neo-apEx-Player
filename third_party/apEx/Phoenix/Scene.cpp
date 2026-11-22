@@ -665,9 +665,9 @@ void CphxObject_ParticleEmitter_CPU::CreateRenderDataInstances( int Clip, const 
     static int calls = 0;
     calls++;
     // first few, and then every 500th call so a short run shows the counter move
-    // The first particle-calc event is frames 5461..5916: report inside it, which
-    // costs a minute instead of the ten a 3:00 replay takes.
-    if ( CurrentFrame >= 5461 && CurrentFrame <= 5600 && ( calls % 50 ) == 0 )
+    // 3:00 (frame 21600) is the moment the reference has a cloud and this port has
+    // one sphere; report what the emitters look like there.
+    if ( CurrentFrame >= 21400 && CurrentFrame <= 21600 && ( calls % 50 ) == 0 )
     {
       reported++;
       const int slots = 1 << BufferSize;

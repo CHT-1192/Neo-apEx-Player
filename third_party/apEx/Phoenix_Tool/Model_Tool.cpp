@@ -1,3 +1,4 @@
+#include "rhi/vk_core.h"
 #include "BasePCH.h"
 #include "Model_Tool.h"
 #include "apxProject.h"
@@ -1081,6 +1082,14 @@ void CphxModelObject_Tool_Mesh::ImportData( CXMLNode *Node )
 
 TBOOL CphxModelObject_Tool_Mesh::GenerateResource( CCoreDevice *Dev )
 {
+  // [port] How often a mesh is rebuilt.  Once per model is right; once per frame
+  // would mean the resource queue is being re-requested continuously, which is
+  // what a CPU profile of a steady frame points at.
+  {
+    static long long n = 0;
+    n++;
+    if (n % 500 == 0) phxvk::LogInfo("[mesh] %lld mesh resource generations so far", n);
+  }
   CphxMesh &Mesh = GetModelObject()->Mesh;
 
   Mesh.Vertices.FlushFast();
