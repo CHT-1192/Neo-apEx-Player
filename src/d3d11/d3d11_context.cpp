@@ -1,4 +1,5 @@
 #include <type_traits>
+#include <map>
 
 namespace phxd3d11
 {
@@ -9,6 +10,12 @@ static unsigned long long g_draws = 0;
 // fragmentation carries no drawing at all.
 static unsigned long long g_passBegins = 0, g_emptyPasses = 0, g_drawsAtPassStart = 0;
 static bool g_passOpen = false;
+static unsigned long long g_endOMSet = 0, g_endUpload = 0, g_endTrans = 0, g_endSubmit = 0;
+unsigned long long phxEndOMSet() { return g_endOMSet; }
+unsigned long long phxEndUpload() { return g_endUpload; }
+unsigned long long phxEndTrans() { return g_endTrans; }
+unsigned long long phxEndSubmit() { return g_endSubmit; }
+
 unsigned long long phxPassBegins() { return g_passBegins; }
 unsigned long long phxEmptyPasses() { return g_emptyPasses; }
 unsigned long long phxDrawCount() { return g_draws; }
@@ -355,7 +362,7 @@ void ContextImpl::SubmitAndWait()
 {
   phxvk::Device &d = phxvk::Vk();
   if (!d.frameActive) return;
-  EndRendering();
+  g_endSubmit++; EndRendering();
   phxvk::FrameEndAndSubmit();
   vkWaitForFences(d.device, 1, &d.frameFence, VK_TRUE, UINT64_MAX);
   phxvk::FrameWaitIdle();
@@ -819,12 +826,25 @@ void ContextImpl::TransitionBindings(const std::vector<MergedBinding> &bindings)
   }
   if (pending.empty()) return;
 
-  // Nothing to do in the common case (which is why this is cheap); when there
-  // is, the pass has to be split because the barrier may not be recorded
-  // inside it.  EnsureRenderingStarted() re-opens it with loadOp = LOAD, so no
-  // attachment contents are lost.
-  if (renderingActive) EndRendering();
-  for (TextureImpl *tex : pending) TransitionImage(tex, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+  // A barrier inside dynamic rendering is legal for images that are not among the
+  // attachments; only those force the pass to be split.  Splitting for every
+  // transition produced 65 render passes per frame for 25 draws, 29 of them with no
+  // draw at all.
+  auto isAttachment = [&](TextureImpl *t) {
+    for (UINT i = 0; i < rtvCount && i < kMaxRenderTargets; i++)
+      if (rtv[i] && static_cast<RTVImpl *>(rtv[i])->v.texture == t) return true;
+    if (dsv)
+    {
+      auto *v = static_cast<DSVImpl *>(dsv);
+      if (v && v->v.texture == t) return true;
+    }
+    return false;
+  };
+  for (TextureImpl *tex : pending)
+  {
+    if (renderingActive && isAttachment(tex)) g_endTrans++; EndRendering();
+    TransitionImage(tex, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+  }
 }
 
 // A descriptor write inside the render pass must not change a layout; if it
@@ -2027,8 +2047,8 @@ void ContextImpl::OMSetRenderTargets(UINT NumViews, ID3D11RenderTargetView *cons
   if (dsv != pDepthStencilView) changed = true;
   if (!changed) return;
 
-  EndRendering();
-  EndRendering(); // no-op, kept for symmetry
+  g_endOMSet++; EndRendering();
+  g_endOMSet++; EndRendering(); // no-op, kept for symmetry
   rtvCount = NumViews > kMaxRenderTargets ? kMaxRenderTargets : NumViews;
   for (UINT i = 0; i < kMaxRenderTargets; i++) BindRef(rtv[i], (i < rtvCount && ppRenderTargetViews) ? ppRenderTargetViews[i] : nullptr);
   BindRef(dsv, pDepthStencilView);
@@ -2042,7 +2062,7 @@ void ContextImpl::OMSetRenderTargetsAndUnorderedAccessViews(UINT NumRTVs, ID3D11
   // 0xffffffff means "leave the current render targets alone".
   if (NumRTVs != 0xffffffff)
   {
-    EndRendering();
+    g_endOMSet++; EndRendering();
     rtvCount = NumRTVs > kMaxRenderTargets ? kMaxRenderTargets : NumRTVs;
     for (UINT i = 0; i < kMaxRenderTargets; i++) BindRef(rtv[i], (i < rtvCount && ppRenderTargetViews) ? ppRenderTargetViews[i] : nullptr);
     BindRef(dsv, pDepthStencilView);
@@ -2739,7 +2759,7 @@ void ContextImpl::CopySubresourceRegion(ID3D11Resource *pDstResource, UINT DstSu
                                        const D3D11_BOX *pSrcBox)
 {
   if (!pDstResource || !pSrcResource) return;
-  EndRendering();
+  g_endUpload++; EndRendering();
   BeginFrameIfNeeded();
   VkCommandBuffer cmd = phxvk::FrameCommandBuffer();
 
@@ -2844,7 +2864,7 @@ void ContextImpl::CopySubresourceRegion(ID3D11Resource *pDstResource, UINT DstSu
 void ContextImpl::UpdateSubresource(ID3D11Resource *pDstResource, UINT DstSubresource, const D3D11_BOX *pDstBox, const void *pSrcData, UINT SrcRowPitch, UINT SrcDepthPitch)
 {
   if (!pDstResource || !pSrcData) return;
-  EndRendering();
+  g_endUpload++; EndRendering();
   BeginFrameIfNeeded();
 
   if (BufferImpl *buf = AsBuffer(pDstResource))
@@ -2916,7 +2936,7 @@ void ContextImpl::ResolveSubresource(ID3D11Resource *pDstResource, UINT DstSubre
     CopyResource(pDstResource, pSrcResource);
     return;
   }
-  EndRendering();
+  g_endUpload++; EndRendering();
   BeginFrameIfNeeded();
   const uint32_t dstMips = dstTex->mipLevels ? dstTex->mipLevels : 1;
   const uint32_t srcMips = srcTex->mipLevels ? srcTex->mipLevels : 1;
@@ -2981,7 +3001,7 @@ void ContextImpl::GenerateMips(ID3D11ShaderResourceView *pShaderResourceView)
     filter = VK_FILTER_NEAREST;
   }
 
-  EndRendering();
+  g_endUpload++; EndRendering();
   BeginFrameIfNeeded();
   VkCommandBuffer cmd = phxvk::FrameCommandBuffer();
   const VkImageAspectFlags aspect = AspectForTexture(tex);

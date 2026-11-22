@@ -488,7 +488,7 @@ extern long long phxSplineCreatedTotal();
 extern long long phxSplineLiveTotal();
 extern unsigned long long phxTexgenRenders();
 extern unsigned long long phxTexgenPixels();
-namespace phxd3d11 { unsigned long long phxDrawCount(); unsigned long long phxPassBegins(); unsigned long long phxEmptyPasses(); }
+namespace phxd3d11 { unsigned long long phxDrawCount(); unsigned long long phxPassBegins(); unsigned long long phxEmptyPasses(); unsigned long long phxEndOMSet(); unsigned long long phxEndUpload(); unsigned long long phxEndTrans(); unsigned long long phxEndSubmit(); }
 extern void phxTexgenResetCounters();
 
 int main(int argc, char **argv)
@@ -1600,6 +1600,7 @@ int main(int argc, char **argv)
     if ((rendered % 300) == 0)
     {
   static unsigned long long lastR = 0, lastP = 0, lastD = 0, lastP2 = 0, lastE = 0;
+    static unsigned long long lastE1 = 0, lastE2 = 0, lastE3 = 0, lastE4 = 0;
   static long long lastF = 0;
   if (rendered > lastF)
   {
@@ -1610,6 +1611,11 @@ int main(int argc, char **argv)
     phxvk::LogInfo("[passes] %.1f render passes and %.1f empty passes per frame over frames %lld..%lld",
                    (phxd3d11::phxPassBegins() - lastP2) / frames, (phxd3d11::phxEmptyPasses() - lastE) / frames,
                    lastF, (long long)rendered);
+    phxvk::LogInfo("[passes]   ended by: omset %.1f upload %.1f transition %.1f submit %.1f",
+                   (phxd3d11::phxEndOMSet() - lastE1) / frames, (phxd3d11::phxEndUpload() - lastE2) / frames,
+                   (phxd3d11::phxEndTrans() - lastE3) / frames, (phxd3d11::phxEndSubmit() - lastE4) / frames);
+    lastE1 = phxd3d11::phxEndOMSet(); lastE2 = phxd3d11::phxEndUpload();
+    lastE3 = phxd3d11::phxEndTrans(); lastE4 = phxd3d11::phxEndSubmit();
     lastP2 = phxd3d11::phxPassBegins(); lastE = phxd3d11::phxEmptyPasses();
     phxvk::LogInfo("[draws] %.1f draws per frame over frames %lld..%lld",
                    (phxd3d11::phxDrawCount() - lastD) / frames, lastF, (long long)rendered);
