@@ -77,12 +77,15 @@ Open:
    videos (the videos are not in the repo).
 3. **Linux builds and passes its tests, but nothing has played there** -- it needs a
    machine with a GPU.
-4. **The fat vertex still travels in vertex attributes**, so a geometry shader
-   needing more attribute locations than the device has is refused.  A
-   `ByteAddressBuffer` version is generated and unit-tested (`phx_gs_test`), but it
-   is not wired: the input layout only exists at pipeline creation, so the context
-   has to re-translate there.  An earlier attempt that shipped the buffer without
-   that step rendered frame 3697 of the demo as garbage and was reverted.
+4. ~~The fat vertex travels in vertex attributes, so a geometry shader needing more
+   attribute locations than the device has is refused.~~ **Closed**: the stage is
+   translated again at pipeline creation, where the input layout first exists, and
+   reads its input from a `ByteAddressBuffer` at the D3D11 element offsets.  A
+   33-location layout now renders on a device that allows 31 (`phx_smoke` case 9),
+   the padded mixed-type layout is case 10, and every sampled frame is byte-identical
+   to the attribute path.  Three things had to be right and each was found by a test:
+   the per-vertex base, a registered reflection (the descriptor set layout is built
+   from it), and MoltenVK refusing a pipeline whose vertex input state is empty.
 5. `--fixed-fps` cannot hold 120 fps (9.61 ms against an 8.33 ms budget at 320x180).
 6. Five of the ten shipped `.mvm` files kill the closed-source synth inside
    `mvxSystem_LoadMusic`, before it can say why.
