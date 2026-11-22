@@ -1125,11 +1125,12 @@ const EmulatedGeometryShader *ContextImpl::EmulationPlanFor(const ShaderCommon *
 // Components of the 32-bit float formats the byte-offset path supports.  Anything
 // else (halfs, packed formats) falls back to vertex attributes, which decode
 // exactly whatever the input assembler would have.
-// Off by default until it renders the demo correctly: the attribute path is exact
-// by construction, and this one is still being brought up.
+// On by default: this is what removes the device's vertex-attribute limit.  The
+// attribute path stays as the fallback for layouts the byte path cannot express,
+// and APEX_GS_NO_BYTES=1 forces it for comparison.
 static bool BytePathEnabled()
 {
-  static const bool enabled = getenv("APEX_GS_BYTES") != nullptr;
+  static const bool enabled = getenv("APEX_GS_NO_BYTES") == nullptr;
   return enabled;
 }
 
@@ -1212,6 +1213,10 @@ ID3D11VertexShader *ContextImpl::EmulatedVertexShaderForLayout(const EmulatedGeo
     const unsigned bytes = (kind == phxvk::VertexElementKind::UNorm8x4) ? 4 : components * 4;
     stride = std::max<unsigned>(stride, e.AlignedByteOffset + bytes);
   }
+  // Prefer the stride the draw actually binds: elements do not have to reach the
+  // end of the vertex (a layout with trailing padding does not), and the fat vertex
+  // is packed with that stride, so the base arithmetic has to agree with it.
+  if (vertexStrides[0]) stride = vertexStrides[0];
   if (elems.empty() || stride == 0) return nullptr;
 
   // The key has to name the shader: two geometry shaders with the same layout were
@@ -1446,8 +1451,13 @@ bool ContextImpl::PrepareDraw(VkPipeline *outPipeline, VkPipelineLayout *outLayo
     emuPlan = EmulationPlanFor(stages[kStageGS].shader);
     if (emuPlan)
     {
-      if (ID3D11VertexShader *vs = EmulatedVertexShaderFor(stages[kStageGS].shader))
-        emuVs = static_cast<VertexShaderImpl *>(vs);
+      // The pipeline has to use the stage that was actually chosen above: asking
+      // for the attribute variant again here would pair an attribute-reading shader
+      // with the storage path's (deliberately unbound) vertex buffer, which draws
+      // from unbound memory.
+      ID3D11VertexShader *vs = emulatedVsEarly ? emulatedVsEarly
+                                               : EmulatedVertexShaderFor(stages[kStageGS].shader);
+      if (vs) emuVs = static_cast<VertexShaderImpl *>(vs);
     }
     if (!emuPlan || !emuVs)
     {
