@@ -1125,6 +1125,14 @@ const EmulatedGeometryShader *ContextImpl::EmulationPlanFor(const ShaderCommon *
 // Components of the 32-bit float formats the byte-offset path supports.  Anything
 // else (halfs, packed formats) falls back to vertex attributes, which decode
 // exactly whatever the input assembler would have.
+// Off by default until it renders the demo correctly: the attribute path is exact
+// by construction, and this one is still being brought up.
+static bool BytePathEnabled()
+{
+  static const bool enabled = getenv("APEX_GS_BYTES") != nullptr;
+  return enabled;
+}
+
 static unsigned FloatComponents(DXGI_FORMAT format)
 {
   switch (format)
@@ -1269,7 +1277,42 @@ ID3D11VertexShader *ContextImpl::EmulatedVertexShaderForLayout(const EmulatedGeo
 bool ContextImpl::PrepareDraw(VkPipeline *outPipeline, VkPipelineLayout *outLayout, std::vector<MergedBinding> *outBindings)
 {
   EnsureDummies();
+
+  // The byte-offset emulated stage reads its fat vertex through a storage buffer, so
+  // its binding has to be part of the descriptor set layout.  That layout is built a
+  // few lines down from the merged reflections, and the stage is not one of the bound
+  // stages, so the stage is created here first and its bindings folded in below.
+  // Without this vkCreateGraphicsPipelines fails with VK_ERROR_INITIALIZATION_FAILED
+  // and the draw is dropped -- which is what made the frame 78% different.
+  const EmulatedGeometryShader *emulatedPlanEarly = nullptr;
+  ID3D11VertexShader *emulatedVsEarly = nullptr;
+  bool emulatedStorageEarly = false;
+  if (BytePathEnabled() && stages[kStageGS].shader && inputLayout &&
+      phxvk::Vk().features.geometryShader == VK_FALSE)
+  {
+    emulatedPlanEarly = EmulationPlanFor(stages[kStageGS].shader);
+    if (emulatedPlanEarly)
+      emulatedVsEarly = EmulatedVertexShaderForLayout(emulatedPlanEarly,
+                                                      static_cast<InputLayoutImpl *>(inputLayout),
+                                                      &emulatedStorageEarly);
+  }
+
   std::vector<MergedBinding> bindings = MergeBindings();
+  if (emulatedStorageEarly && emulatedVsEarly)
+  {
+    auto *impl = static_cast<VertexShaderImpl *>(emulatedVsEarly);
+    for (const phxvk::DescriptorBinding &b : impl->reflection.bindings)
+    {
+      bool present = false;
+      for (const MergedBinding &m : bindings)
+        if (m.desc.binding == b.binding) present = true;
+      if (present) continue;
+      MergedBinding mb;
+      mb.desc = b;
+      mb.stages = VK_SHADER_STAGE_VERTEX_BIT;
+      bindings.push_back(mb);
+    }
+  }
   if (outBindings) *outBindings = bindings;
 
   VkDescriptorSetLayout setLayout = GetSetLayout(bindings);
@@ -1294,19 +1337,8 @@ bool ContextImpl::PrepareDraw(VkPipeline *outPipeline, VkPipelineLayout *outLayo
     // Prefer the byte-offset stage: it removes the device's attribute limit.  It
     // needs the input layout, which only exists here, so the translation happens
     // at pipeline creation rather than at D3DCompile time.
-    emulationUsesStorage = false;
-    ID3D11VertexShader *emuVs = nullptr;
-    {
-      static int once = 0;
-      if (once++ < 3)
-        phxvk::LogInfo("[gs-bytes] entry: plan=%d il=%d src=%zu", plan != nullptr, inputLayout != nullptr,
-                       plan ? plan->source.size() : 0);
-    }
-    // Off by default until it renders the demo correctly: the attribute path is
-    // exact by construction, and this one is still being brought up.
-    static const bool bytePathEnabled = getenv("APEX_GS_BYTES") != nullptr;
-    if (plan && inputLayout && bytePathEnabled)
-      emuVs = EmulatedVertexShaderForLayout(plan, static_cast<InputLayoutImpl *>(inputLayout), &emulationUsesStorage);
+    emulationUsesStorage = emulatedStorageEarly;
+    ID3D11VertexShader *emuVs = emulatedVsEarly;
     if (!emuVs)
       emuVs = plan ? EmulatedVertexShaderFor(stages[kStageGS].shader) : nullptr;
     // The fat vertex repeats the input layout once per input vertex, so the
