@@ -1,4 +1,21 @@
 #include <type_traits>
+
+namespace phxd3d11
+{
+
+// Per-frame accounting used by the diagnostics in the player.
+static unsigned long long g_draws = 0;
+// Render pass accounting: how fragmented a frame is, and how much of that
+// fragmentation carries no drawing at all.
+static unsigned long long g_passBegins = 0, g_emptyPasses = 0, g_drawsAtPassStart = 0;
+static bool g_passOpen = false;
+unsigned long long phxPassBegins() { return g_passBegins; }
+unsigned long long phxEmptyPasses() { return g_emptyPasses; }
+unsigned long long phxDrawCount() { return g_draws; }
+void phxDrawResetCounters() { g_draws = 0; }
+
+} // namespace phxd3d11
+
 // ID3D11DeviceContext: the D3D11 immediate context mapped onto one Vulkan
 // command buffer, dynamic rendering and lazily built pipelines.
 #include "d3d11_internal.h"
@@ -326,6 +343,8 @@ bool ContextImpl::BeginFrameIfNeeded()
 
 void ContextImpl::EndRendering()
 {
+  if (g_passOpen && g_draws == g_drawsAtPassStart) g_emptyPasses++;
+  g_passOpen = false;
   if (!renderingActive) return;
   VkCommandBuffer cmd = phxvk::FrameCommandBuffer();
   renderingActive = false;
@@ -455,6 +474,9 @@ void ContextImpl::TransitionImage(TextureImpl *tex, VkImageLayout newLayout)
 
 void ContextImpl::EnsureRenderingStarted()
 {
+  g_passBegins++;
+  g_passOpen = true;
+  g_drawsAtPassStart = g_draws;
   if (renderingActive) return;
   BeginFrameIfNeeded();
 
@@ -2464,9 +2486,7 @@ bool ContextImpl::DrawInternal(bool indexed, UINT count, UINT instanceCount, UIN
 
 // [port] Per-frame draw counting: a D3D11-on-Vulkan shim can easily end up
 // draw-call bound, and this is the cheapest way to find out.
-static unsigned long long g_draws = 0;
-unsigned long long phxDrawCount() { return g_draws; }
-void phxDrawResetCounters() { g_draws = 0; }
+
 
 
 // APEX_NO_DRAW=1 keeps the whole frame pipeline -- scene graph updates, the
