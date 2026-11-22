@@ -487,6 +487,20 @@ static CphxObject_ParticleAffector *affectors[ 256 ];
 
 void CphxObject_ParticleEmitter_CPU::UpdateParticles( float elapsedtime, bool updatebuffer )
 {
+  // [port] Which objects the simulation actually reaches, so the draw-time probe
+  // can be matched against it by pointer.
+  {
+    static int n = 0;
+    if (elapsedtime > 0.0f && n++ < 5)
+    {
+      fprintf( stderr, "[upd+] obj %p dt=%.5f ticks_before=%.3f\n", (void *)this, elapsedtime, Ticks );
+      fflush( stderr );
+    }
+    static long long zeroCalls = 0, allCalls = 0;
+    allCalls++; if (elapsedtime == 0.0f) zeroCalls++;
+    if (allCalls == 200000)
+      fprintf( stderr, "[upd] %lld of %lld calls had dt=0\n", zeroCalls, allCalls );
+  }
   //D3DXMATRIX wm = GetWorldMatrix();
 
   int particlecount = 1 << BufferSize;
@@ -651,8 +665,8 @@ void CphxObject_ParticleEmitter_CPU::CreateRenderDataInstances( int Clip, const 
       int alive = 0;
       for ( int y = 0; y < slots; y++ )
         if ( Particles[ y ].LifeLeft > 0 ) alive++;
-      fprintf( stderr, "[particles] frame %d buffersize %d = %d slots, %d alive, LiveCount %d, Ticks %.3f, emit-scene %d, emit-mesh %d, emit/s %.4f, life %.3f, lifechaos %.3f, aging %d, spawns %lld\n",
-              CurrentFrame, (int)BufferSize, slots, alive, (int)LiveCount, Ticks, SceneToEmit ? 1 : 0, ObjectToEmit ? 1 : 0,
+      fprintf( stderr, "[particles] obj %p frame %d buffersize %d = %d slots, %d alive, LiveCount %d, Ticks %.3f, emit-scene %d, emit-mesh %d, emit/s %.4f, life %.3f, lifechaos %.3f, aging %d, spawns %lld\n",
+              (void *)this, CurrentFrame, (int)BufferSize, slots, alive, (int)LiveCount, Ticks, SceneToEmit ? 1 : 0, ObjectToEmit ? 1 : 0,
               SplineResults[ Spline_Particle_EmissionPerSecond ], SplineResults[ Spline_Particle_Life ],
               SplineResults[ Spline_Particle_LifeChaos ], Aging ? 1 : 0, g_particleSpawns );
       fflush( stderr );
@@ -828,6 +842,11 @@ void CphxObject_ParticleEmitter_CPU::UpdateSplineTexture()
 
 void CphxObject_ParticleEmitter_CPU::ResetParticles()
 {
+  {
+    static long long n = 0;
+    n++;
+    if (n % 5000 == 0) { fprintf( stderr, "[reset] %lld resets so far, obj %p ticks_before=%.3f\n", n, (void *)this, Ticks ); fflush( stderr ); }
+  }
   objIdxMod = 0;
   D3DXMATRIX wm = GetWorldMatrix();
   currMatrix = prevMatrix = wm;

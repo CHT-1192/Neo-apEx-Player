@@ -1,3 +1,5 @@
+#include <set>
+#include "rhi/vk_core.h"   // [port] phxvk::LogInfo for the particle probe
 #include "BasePCH.h"
 #include "Scene_tool.h"
 #include "apxProject.h"
@@ -284,10 +286,19 @@ void CphxScene_Tool::ImportData( CXMLNode *Node )
 
 TBOOL CphxScene_Tool::GenerateResource( CCoreDevice *Dev )
 {
-  SwapParticleBuffers();
-  ResetParticles();
-  SwapParticleBuffers();
-  ResetParticles();
+  // [port] Once.  This pair swaps in the zeroed backup particle buffer and resets
+  // the emitters, which is right when the editor loads or reloads a scene -- but the
+  // player regenerates content while it plays, and doing it every frame threw away
+  // the particles the particle-calc event had just simulated: the simulation log
+  // showed Ticks climbing while the draw reported Ticks 0 and nothing alive.
+  static std::set<CphxScene_Tool *> particlesReset;
+  if (particlesReset.insert( this ).second)
+  {
+    SwapParticleBuffers();
+    ResetParticles();
+    SwapParticleBuffers();
+    ResetParticles();
+  }
   return true;
 }
 
@@ -2930,6 +2941,18 @@ void CphxObject_ParticleEmitter_CPU_Tool::SimulateParticles( TF32 ElapsedTime )
   // were never born, and a cloud of them simply did not exist.  Simulate always,
   // and only ask for the buffer upload when there is a buffer to upload into.
   obj->UpdateParticles( ElapsedTime, obj->VertexBuffer != nullptr );
+
+  // [port] What the 3:00 cloud needs to know: how many particles this emitter
+  // believes are alive, and whether it is drawing a mesh or a sub-scene per
+  // particle.  One sphere in the frame means LiveCount is 1, or the particles all
+  // share a transform.
+  {
+    static std::set<const void *> seen;
+    if (seen.insert(obj).second)
+      phxvk::LogInfo("[particles] simulated emitter obj=%p live=%d emissionFraction=%.3f mesh=%d scene=%d",
+                     (void *)obj, obj->LiveCount, obj->EmissionFraction,
+                     EmitedObject != nullptr, EmitedScene != nullptr);
+  }
 }
 
 void CphxObject_ParticleEmitter_CPU_Tool::CreateSplines( CphxObjectClip_Tool *Clip )

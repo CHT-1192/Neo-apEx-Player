@@ -295,8 +295,12 @@ void CphxEvent_ParticleCalc::Render( float t, float prevt, float aspect, bool su
       int emitters = 0;
       for ( int x = 0; x < Scene->ObjectCount; x++ )
         if ( Scene->Objects[ x ]->ObjectType == Object_ParticleEmitterCPU ) emitters++;
-      fprintf( stderr, "[pcalc] t=%.4f tme=%d lasttime=%d dt=%.5f s, %d object(s), %d emitter(s)\n",
-              t, tme, lasttime, ( tme - lasttime ) / 1000.0f, (int)Scene->ObjectCount, emitters );
+      int firstEmitter = -1;
+      for ( int x = 0; x < Scene->ObjectCount; x++ )
+        if ( Scene->Objects[ x ]->ObjectType == Object_ParticleEmitterCPU ) { firstEmitter = x; break; }
+      fprintf( stderr, "[pcalc] scene=%p t=%.4f tme=%d lasttime=%d dt=%.5f s, %d object(s), %d emitter(s), first emitter %p\n",
+              (void *)Scene, t, tme, lasttime, ( tme - lasttime ) / 1000.0f, (int)Scene->ObjectCount, emitters,
+              firstEmitter >= 0 ? (void *)Scene->Objects[ firstEmitter ] : nullptr );
       fflush( stderr );
     }
   }

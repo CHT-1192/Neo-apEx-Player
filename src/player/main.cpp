@@ -20,6 +20,7 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include <set>
 
 #include "platform/window_sdl.h" // pulls WindowHandler.h, Enums.h, Device.h + SDL
 #include "DX11Device.h"
@@ -1409,12 +1410,24 @@ int main(int argc, char **argv)
             CphxEvent_RenderScene_Tool *rs = (CphxEvent_RenderScene_Tool *)e;
             if (rs->Scene)
             {
-              rs->Scene->ForceUpdateContent();
+              // Update the content once per activation, not every frame: the
+              // request goes through GenerateResource(), whose particle handling
+              // swaps in the zeroed backup buffer and resets the emitters.  Calling
+              // it every frame undid the particle simulation from the frame before,
+              // which is why the drawn emitters reported Ticks 0 and 0 alive while
+              // the simulation log showed them advancing.
+              static std::set<const CphxEvent_Tool *> contentUpdated;
+              if (contentUpdated.insert(e).second) rs->Scene->ForceUpdateContent();
               // The editor's frame loop called this; nothing in the vendored tree
               // does, so particles never simulated -- Ticks never accumulated,
               // no particle was ever alive, and a sub-scene-emitting emitter drew
               // nothing at all.  That is the missing cloud at 3:00.
               rs->Scene->SimulateParticles();
+              {
+                static std::set<const void *> seen;
+                if (seen.insert(rs->Scene).second)
+                  phxvk::LogInfo("[renderscene] scene=%p (rendered)", (void *)rs->Scene);
+              }
             }
           }
           else if (e->Type == EVENT_SHADERTOY)
