@@ -956,10 +956,10 @@ int main()
     };
     if (has("ByteAddressBuffer gsemu_fat : register(u60)"))
     {
-      has("asfloat(gsemu_fat.Load3(0))");    // pos at offset 0, three components
-      has("asfloat(gsemu_fat.Load2(16))");   // uv at 16
-      has("asfloat(gsemu_fat.Load4(24))");   // color at 24
-      has("asfloat(gsemu_fat.Load(40))");    // width at 40
+      has("asfloat(gsemu_fat.Load3( gsemu_base + 0 ))");    // pos at offset 0, three components
+      has("asfloat(gsemu_fat.Load2( gsemu_base + 16 ))");   // uv at 16
+      has("asfloat(gsemu_fat.Load4( gsemu_base + 24 ))");   // color at 24
+      has("asfloat(gsemu_fat.Load( gsemu_base + 40 ))");    // width at 40
       // The stride is baked in: three input vertices of 48 bytes each.
       has("gsemu_vid * 144u");
     }

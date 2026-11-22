@@ -1236,6 +1236,18 @@ ID3D11VertexShader *ContextImpl::EmulatedVertexShaderForLayout(const EmulatedGeo
     return nullptr;
   }
 
+  // The reflection side table is keyed by the SPIR-V, and this stage was compiled
+  // here rather than through D3DCompile, so nothing else knows its bindings.  Without
+  // this the descriptor set layout has no entry for `u60`, the buffer write goes
+  // nowhere and the stage reads whatever was bound there -- which rendered as a
+  // 78% different frame.
+  {
+    ShaderReflectionRecord rec;
+    rec.reflection = emu.reflection;
+    rec.stage = phxvk::ShaderStage::Vertex;
+    RegisterShaderReflection(emu.spirv.data(), emu.spirv.size() * sizeof(uint32_t), rec);
+  }
+
   ID3D11VertexShader *vs = nullptr;
   if (FAILED(device->CreateVertexShader(emu.spirv.data(), emu.spirv.size() * sizeof(uint32_t), nullptr, &vs)) || !vs)
   {
@@ -1507,11 +1519,6 @@ bool ContextImpl::PrepareDraw(VkPipeline *outPipeline, VkPipelineLayout *outLayo
       }
   }
 
-  {
-    static int dbgTrue = 0;
-    if (emulationUsesStorage && dbgTrue++ < 5)
-      phxvk::LogInfo("[gs-bytes] pipeline USING STORAGE (il=%d)", il != nullptr);
-  }
   if (il && !emulationUsesStorage)
   {
     for (UINT rep = 0; rep < reps; rep++)

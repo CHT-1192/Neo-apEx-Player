@@ -837,7 +837,7 @@ bool EmitByteLoader(std::string &out, const std::vector<VsMember> &members, unsi
       if (m.components != 4 || off + 4 > stride) return false;
       // R8G8B8A8_UNORM is four bytes, one per channel, little endian; the input
       // assembler would have divided by 255 and the shader expects the same.
-      out += "  { uint gsemu_c = gsemu_fat.Load(" + std::to_string(off) + ");\n";
+      out += "  { uint gsemu_c = gsemu_fat.Load( gsemu_base + " + std::to_string(off) + " );\n";
       out += "    r." + m.name + " = float4( (gsemu_c & 255u) / 255.0, ((gsemu_c >> 8) & 255u) / 255.0,"
              " ((gsemu_c >> 16) & 255u) / 255.0, ((gsemu_c >> 24) & 255u) / 255.0 ); }\n";
       continue;
@@ -845,10 +845,10 @@ bool EmitByteLoader(std::string &out, const std::vector<VsMember> &members, unsi
     if (off + m.components * 4 > stride) return false;
     const char *swizzle = m.components == 1 ? "x" : m.components == 2 ? "xy" : m.components == 3 ? "xyz" : "xyzw";
     if (m.components == 1)
-      out += "  r." + m.name + " = asfloat(gsemu_fat.Load(" + std::to_string(off) + "));\n";
+      out += "  r." + m.name + " = asfloat(gsemu_fat.Load( gsemu_base + " + std::to_string(off) + " ));\n";
     else
-      out += "  r." + m.name + " = asfloat(gsemu_fat.Load" + std::to_string(m.components) + "(" +
-             std::to_string(off) + "));\n";
+      out += "  r." + m.name + " = asfloat(gsemu_fat.Load" + std::to_string(m.components) + "( gsemu_base + " +
+             std::to_string(off) + " ));\n";
     (void)swizzle;
   }
   out += "  return r;\n";
