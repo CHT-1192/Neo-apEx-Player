@@ -1704,6 +1704,7 @@ int main(int argc, char **argv)
   // original release player likewise terminates the process rather than
   // unwinding, so this is deliberate rather than a workaround for a bug in the
   // port.  Use --frames with a debugger if you want to inspect teardown.
+  phxvk::vkSavePipelineCache();
   fflush(nullptr);
   std::_Exit(exitCode);
 }

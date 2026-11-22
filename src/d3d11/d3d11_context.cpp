@@ -1,4 +1,5 @@
 #include <type_traits>
+#include <chrono>
 #include <map>
 
 namespace phxd3d11
@@ -1808,7 +1809,14 @@ bool ContextImpl::PrepareDraw(VkPipeline *outPipeline, VkPipelineLayout *outLayo
   ci.renderPass = VK_NULL_HANDLE;
 
   VkPipeline pipeline = VK_NULL_HANDLE;
-  VkResult res = vkCreateGraphicsPipelines(phxvk::Vk().device, VK_NULL_HANDLE, 1, &ci, nullptr, &pipeline);
+  const auto pipeT0 = std::chrono::steady_clock::now();
+  VkResult res = vkCreateGraphicsPipelines(phxvk::Vk().device, phxvk::Vk().pipelineCache, 1, &ci, nullptr, &pipeline);
+  {
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - pipeT0).count();
+    static int n = 0;
+    if (ms > 100.0) phxvk::LogWarn("[pipeline] vkCreateGraphicsPipelines took %.0f ms", ms);
+    else if (n++ < 5) phxvk::LogInfo("[pipeline] created in %.1f ms", ms);
+  }
   if (res != VK_SUCCESS)
   {
     phxvk::LogError("vkCreateGraphicsPipelines failed: %s (topology %d, %u RTs, depth %d)", phxvk::VkResultName(res), (int)key.topology, key.colorCount, (int)key.depth);

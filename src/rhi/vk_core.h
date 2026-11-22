@@ -22,6 +22,8 @@ struct Device
   VkDevice device = VK_NULL_HANDLE;
   uint32_t queueFamily = 0;
   VkQueue queue = VK_NULL_HANDLE;
+  VkPipelineCache pipelineCache = VK_NULL_HANDLE;
+  std::string pipelineCachePath;
   VkPhysicalDeviceProperties props{};
   VkPhysicalDeviceMemoryProperties memProps{};
   VkPhysicalDeviceFeatures features{};
@@ -77,6 +79,10 @@ void vkInitialize(bool enableValidation, const char *appName);
 void vkRequestValidation(bool enable);
 bool vkValidationRequested();
 void vkShutdown();
+
+// Writes the pipeline cache to disk.  Safe to call before an abrupt exit; the
+// player deliberately skips engine teardown, so vkShutdown() never runs there.
+void vkSavePipelineCache();
 
 // Totals for every image and buffer the shim has allocated, largest first.
 void PrintMemoryStats();

@@ -1,4 +1,5 @@
 #include "shader_compiler.h"
+#include <chrono>
 #include "vk_core.h"
 
 #include <shaderc/shaderc.h>
@@ -1003,6 +1004,20 @@ std::string PreprocessHLSL(const std::string &src, ShaderStage stage, const char
 
 CompiledShader CompileHLSL(const char *source, size_t length, const char *entryPoint, ShaderStage stage, const char *debugName)
 {
+  // [port] Compile cost, because a scene switch compiles every shader it has not
+  // used yet, and that is where multi-second frames come from.
+  struct CompileTimer
+  {
+    std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+    const char *entry;
+    const char *name;
+    ~CompileTimer()
+    {
+      const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+      static int n = 0;
+      if (n++ < 10) phxvk::LogWarn("[shader] %s (%s) took %.1f ms", entry, name, ms);
+    }
+  } timer{std::chrono::steady_clock::now(), entryPoint, debugName};
   CompiledShader result;
   std::string src(source, length);
 

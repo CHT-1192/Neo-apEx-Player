@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <cmath>
 #include <cstring>
+#include <sys/stat.h>
 #include <mutex>
 
 namespace phxvk
@@ -422,6 +423,44 @@ void vkInitialize(bool enableValidation, const char *appName)
 
   vkGetDeviceQueue(d.device, d.queueFamily, 0, &d.queue);
 
+  // A VkPipelineCache, persisted across runs.  vkCreateGraphicsPipelines costs
+  // 20-120 ms here because MoltenVK compiles SPIR-V to Metal inside it, and a scene
+  // switch creates dozens of pipelines at once -- which is the multi-second stall.
+  // The original demo does not stall because the .apx carries precompiled DXBC.
+  {
+    const char *path = getenv("APEX_PIPELINE_CACHE");
+    // Beside the working directory rather than in ~/Library/Caches: this process
+    // may be sandboxed to its workspace, and a cache that silently fails to write
+    // is worse than one in an unexpected place.  APEX_PIPELINE_CACHE overrides it.
+    std::string cachePath = path ? path : "pipeline.cache";
+    std::vector<char> initial;
+    if (FILE *f = fopen(cachePath.c_str(), "rb"))
+    {
+      fseek(f, 0, SEEK_END);
+      const long size = ftell(f);
+      fseek(f, 0, SEEK_SET);
+      if (size > 0)
+      {
+        initial.resize((size_t)size);
+        if (fread(initial.data(), 1, initial.size(), f) != initial.size()) initial.clear();
+      }
+      fclose(f);
+    }
+    VkPipelineCacheCreateInfo ci{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
+    ci.initialDataSize = initial.size();
+    ci.pInitialData = initial.empty() ? nullptr : initial.data();
+    if (vkCreatePipelineCache(d.device, &ci, nullptr, &d.pipelineCache) != VK_SUCCESS)
+    {
+      LogWarn("could not create a pipeline cache; pipelines will be recompiled every run");
+      d.pipelineCache = VK_NULL_HANDLE;
+    }
+    else
+    {
+      LogInfo("[vk] pipeline cache: %s (%zu KB of stored pipelines)", cachePath.c_str(), initial.size() / 1024);
+      d.pipelineCachePath = cachePath;
+    }
+  }
+
   if (d.hasDynamicRendering)
   {
     d.CmdBeginRendering = (PFN_vkCmdBeginRenderingKHR)vkGetDeviceProcAddr(d.device, "vkCmdBeginRenderingKHR");
@@ -458,11 +497,54 @@ void vkInitialize(bool enableValidation, const char *appName)
   LogInfo("Vulkan core ready (dynamic rendering: %s)", d.hasDynamicRendering ? "yes" : "NO");
 }
 
+void vkSavePipelineCache()
+{
+  Device &d = g_device;
+  if (!d.device || d.pipelineCache == VK_NULL_HANDLE || d.pipelineCachePath.empty()) return;
+
+  size_t size = 0;
+  const VkResult cacheRes = vkGetPipelineCacheData(d.device, d.pipelineCache, &size, nullptr);
+  LogInfo("[vk] pipeline cache data: %s, %zu bytes", VkResultName(cacheRes), size);
+  if (cacheRes == VK_SUCCESS && size > 0)
+  {
+    std::vector<char> data(size);
+    if (vkGetPipelineCacheData(d.device, d.pipelineCache, &size, data.data()) == VK_SUCCESS)
+    {
+      const size_t slash = d.pipelineCachePath.find_last_of('/');
+      if (slash != std::string::npos)
+      {
+        const std::string dir = d.pipelineCachePath.substr(0, slash);
+        std::string partial;
+        for (char c : dir)
+        {
+          partial.push_back(c);
+          if (c == '/') mkdir(partial.c_str(), 0755);
+        }
+      }
+      if (FILE *f = fopen(d.pipelineCachePath.c_str(), "wb"))
+      {
+        fwrite(data.data(), 1, size, f);
+        fclose(f);
+        LogInfo("[vk] pipeline cache written: %zu KB", size / 1024);
+      }
+    }
+  }
+  vkDestroyPipelineCache(d.device, d.pipelineCache, nullptr);
+  d.pipelineCache = VK_NULL_HANDLE;
+}
+
 void vkShutdown()
 {
   Device &d = g_device;
   if (!d.device) return;
   vkDeviceWaitIdle(d.device);
+
+  vkSavePipelineCache();
+  if (d.pipelineCache != VK_NULL_HANDLE)
+  {
+    vkDestroyPipelineCache(d.device, d.pipelineCache, nullptr);
+    d.pipelineCache = VK_NULL_HANDLE;
+  }
   // Flush the deferred-destruction lists: vkDestroyDevice would free them
   // anyway, but leaving them queued makes the validation layers report them as
   // leaked objects, and a "clean" validation run has to mean clean.
