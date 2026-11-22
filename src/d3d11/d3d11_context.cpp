@@ -1214,7 +1214,9 @@ ID3D11VertexShader *ContextImpl::EmulatedVertexShaderForLayout(const EmulatedGeo
   }
   if (elems.empty() || stride == 0) return nullptr;
 
-  const uint64_t key = plan->program.restartsAfter.size() * 1000003ull ^
+  // The key has to name the shader: two geometry shaders with the same layout were
+  // sharing one compiled stage, so the second drew the first one's geometry.
+  const uint64_t key = (uint64_t)std::hash<std::string>{}(plan->source) ^
                        ((uint64_t)stride << 32) ^ (uint64_t)elems.size();
   auto it = emulatedVertexShadersByLayout.find(key);
   if (it != emulatedVertexShadersByLayout.end())
