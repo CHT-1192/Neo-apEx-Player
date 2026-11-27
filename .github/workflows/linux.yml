@@ -18,6 +18,11 @@ name: Linux
 # and dispatch again when there is something new to learn.
 on:
   workflow_dispatch:
+    inputs:
+      upload:
+        description: 'Upload the built player as an artifact'
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -96,3 +101,22 @@ jobs:
           set -euo pipefail
           vulkaninfo --summary 2>/dev/null | sed -n '1,20p' || true
           ./ci/run-vulkan-test.sh ./build/phx_smoke
+
+      # What the binary links against, so whoever runs it knows what to install.
+      # Printed always; the artifact only when asked for, since a build here is a
+      # portability probe as often as it is a deliverable.
+      - name: What the binary needs
+        run: |
+          set -euo pipefail
+          file build/neo_apex_player
+          ldd build/neo_apex_player || true
+
+      - name: Upload the player
+        if: inputs.upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: neo-apEx-player-linux-x86_64
+          path: |
+            build/neo_apex_player
+            build/phx_smoke
+          if-no-files-found: error
