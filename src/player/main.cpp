@@ -26,7 +26,9 @@
 #include "DX11Device.h"
 #include "D3Dcompiler.h"
 #include "phxEngine.h"
-#include "player/metal_capture.h"
+#if defined(__APPLE__)
+#include "player/metal_capture.h"   // Metal capture is Objective-C++ and Apple only
+#endif
 #include "apxPhoenix.h"
 #include "apxProject.h"
 #include "phxResource.h"
@@ -1533,6 +1535,7 @@ int main(int argc, char **argv)
       if (spent < budgetMs) SDL_Delay((Uint32)(budgetMs - spent));
     }
 
+#if defined(__APPLE__)
     // MTL_CAPTURE=/tmp/gs.gputrace captures one frame of Metal work (the one at
     // MTL_CAPTURE_FRAME), which is the only way to see what the vertex stage
     // actually reads.  One frame, not three: the trace also snapshots every live
@@ -1551,6 +1554,8 @@ int main(int argc, char **argv)
       phxplayer_stop_metal_capture();
       captureStopped = true;
     }
+
+#endif
 
     if (opt.fixedFps) clock.AdvanceFixedStep();
     else clock.Update();
